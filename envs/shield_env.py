@@ -29,12 +29,19 @@ class ShieldTradingEnv(BaseTradingEnv):
         kwargs.setdefault("min_tp_pct", 0.01)
         kwargs.setdefault("profile_name", "shield")
         super().__init__(**kwargs)
+        self._last_close_step = 0
+        self._had_position = False
+
+    def reset(self, **kwargs):
+        self._last_close_step = 0
+        self._had_position = False
+        return super().reset(**kwargs)
 
     def _calculate_reward(self, ctx: dict) -> float:
         pnl = ctx["pnl_pct"]
         drawdown = ctx["drawdown"]
         has_position = ctx["has_position"]
-        action = ctx["action"]
+        step = ctx["step"]
 
         reward = 0.0
 
@@ -52,11 +59,19 @@ class ShieldTradingEnv(BaseTradingEnv):
         else:
             reward -= drawdown * 0.5  # Mild awareness below 5%
 
-        # --- High-volatility avoidance ---
-        # If ATR/price indicates high vol (feature[20] is atr_norm)
-        is_high_vol = abs(ctx.get("current_price", 0)) > 0 and drawdown > 0.03
-        if is_high_vol and not has_position:
-            reward += 0.02  # Bonus for correctly staying flat
+        # --- Track position close events (for volatility bonus) ---
+        if self._had_position and not has_position:
+            self._last_close_step = step
+        self._had_position = has_position
+
+        # --- Volatility avoidance (decay-based, not unconditional) ---
+        # Only rewards ACTIVELY avoiding volatility after closing a position.
+        # Never-trade agent gets zero bonus. Max per close ≈ 0.48.
+        if not has_position and self._last_close_step > 0:
+            steps_since_close = step - self._last_close_step
+            if 0 < steps_since_close <= 48 and drawdown > 0.03:  # 48 steps = 12h
+                decay = max(0.0, 1.0 - steps_since_close / 48.0)
+                reward += 0.02 * decay
 
         # --- Funding bleed penalty ---
         reward -= abs(ctx.get("funding_cost", 0)) * 0.001
@@ -64,7 +79,6 @@ class ShieldTradingEnv(BaseTradingEnv):
         # --- Anti-trivial-solution: time penalty when flat ---
         if not has_position:
             reward -= 0.00001  # Tiny penalty per step when not trading
-            # This forces the agent to seek safe opportunities
 
         # --- Safe trade bonus ---
         # Reward profitable trades that had low drawdown

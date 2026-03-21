@@ -22,11 +22,18 @@ from typing import Optional
 import numpy as np
 
 # Feature version — bump on ANY change to feature computation
-FEATURE_VERSION = "1.0.0"
+FEATURE_VERSION = "1.1.0"
 FEATURE_HASH = hashlib.md5(f"moleapp-features-{FEATURE_VERSION}".encode()).hexdigest()[:8]
 
 # Total observation dimensions
 OBS_DIM = 47
+
+# Asset identity map — sorted alphabetically, normalized to [0, 1]
+_ASSETS_SORTED = sorted([
+    "ARB", "AVAX", "BTC", "DOGE", "ETH", "FET", "kPEPE", "NEAR",
+    "PENDLE", "POPCAT", "SEI", "SOL", "SUI", "TAO", "WIF",
+])
+ASSET_ID_MAP = {a: i / max(len(_ASSETS_SORTED) - 1, 1) for i, a in enumerate(_ASSETS_SORTED)}
 
 
 @dataclass
@@ -91,6 +98,10 @@ class MarketFeatures:
     fear_greed_index: float  # 0-100
     market_regime: int  # -1=bear, 0=neutral, 1=bull
     cross_asset_momentum: float  # average momentum across all assets
+
+    # v1.1.0: Asset identity & liquidation distance (formerly reserved slots)
+    asset_id_normalized: float = 0.0  # [0, 1] from ASSET_ID_MAP
+    distance_to_liquidation: float = 1.0  # [0, 1]: 0=liquidated, 1=safe/no position
 
 
 def build_observation(features: MarketFeatures) -> np.ndarray:
@@ -170,9 +181,9 @@ def build_observation(features: MarketFeatures) -> np.ndarray:
     obs[43] = math.sin(2 * math.pi * day_of_week / 7.0)
     obs[44] = math.cos(2 * math.pi * day_of_week / 7.0)
 
-    # --- Reserved (3, for future features) ---
-    obs[45] = 0.0
-    obs[46] = 0.0
+    # --- Asset Identity & Liquidation Distance (2, v1.1.0) ---
+    obs[45] = features.asset_id_normalized
+    obs[46] = features.distance_to_liquidation
 
     return obs
 

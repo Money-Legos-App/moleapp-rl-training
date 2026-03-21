@@ -27,18 +27,18 @@ else
     echo "WANDB_API_KEY found in environment"
 fi
 
-# ── 3. Pull episode data from R2 ────────────────────────────────────
-echo "[3/5] Pulling episode data from R2..."
+# ── 3. Pull data from R2 ──────────────────────────────────────────
+echo "[3/5] Pulling data from R2..."
 if [ -z "${R2_ACCESS_KEY_ID:-}" ]; then
     echo "WARNING: R2 credentials not set. Skipping R2 pull."
-    echo "  Set R2_ENDPOINT_URL, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET_NAME"
-    echo "  Or manually copy data/episodes/ to this instance."
+    echo "  Set R2_ENDPOINT_URL, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY"
+    echo "  Or manually copy data/episodes/ and data/datasets/ to this instance."
 else
-    python -c "
-from scripts.r2_sync import download_data
-download_data(prefix='episodes/', local_dir='data/episodes')
-print('Episode data pulled from R2')
-" || echo "R2 pull failed — you may need to build episodes locally"
+    echo "  Pulling parquets..."
+    python scripts/r2_sync.py download --prefix processed --data-dir data/datasets || echo "  Parquet pull failed"
+
+    echo "  Pulling episodes..."
+    python scripts/r2_sync.py download --prefix episodes --data-dir data/episodes || echo "  Episode pull failed"
 fi
 
 # ── 4. Verify episode data exists ────────────────────────────────────

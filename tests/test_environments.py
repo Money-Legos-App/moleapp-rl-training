@@ -563,7 +563,7 @@ class TestFeatureParity:
 
     def test_feature_version_exists(self):
         from data.preprocessors.feature_engineer import FEATURE_VERSION, FEATURE_HASH
-        assert FEATURE_VERSION == "1.0.0"
+        assert FEATURE_VERSION == "1.1.0"
         assert len(FEATURE_HASH) == 8
 
 

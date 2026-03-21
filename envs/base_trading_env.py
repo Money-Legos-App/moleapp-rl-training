@@ -227,6 +227,21 @@ class BaseTradingEnv(gym.Env):
             self.state.position.direction if self.state.position else 0
         )
 
+        # Distance to liquidation (v1.1.0)
+        if self.state.position is not None:
+            pos = self.state.position
+            price = self._get_price(idx)
+            if pos.direction == 1:  # long
+                pnl_pct = (price - pos.entry_price) / pos.entry_price * pos.leverage
+            else:  # short
+                pnl_pct = (pos.entry_price - price) / pos.entry_price * pos.leverage
+            liq_threshold = -1.0 / pos.leverage + LIQUIDATION_MAINTENANCE_MARGIN
+            features.distance_to_liquidation = max(0.0, min(1.0,
+                (pnl_pct - liq_threshold) / max(abs(liq_threshold), 0.01)
+            ))
+        else:
+            features.distance_to_liquidation = 1.0
+
         return build_observation(features)
 
     def _get_price(self, idx: int) -> float:

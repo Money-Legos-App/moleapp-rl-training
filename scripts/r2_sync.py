@@ -1,18 +1,22 @@
 """
-Cloudflare R2 Sync — Upload/download raw data to R2 bucket
-============================================================
-R2 is used for raw OHLCV, funding, and OI parquet dumps.
+Cloudflare R2 Sync — Upload/download data to R2 bucket
+========================================================
+R2 stores parquets (16 MB) and pre-built episodes (121 MB) for RunPod.
 S3-compatible API via boto3.
 
 Usage:
-    # Upload all raw data
-    python scripts/r2_sync.py upload --data-dir data/datasets
+    # Upload parquets
+    python scripts/r2_sync.py upload --prefix processed --data-dir data/datasets
 
-    # Download raw data (e.g., on RunPod before building episodes)
-    python scripts/r2_sync.py download --data-dir data/datasets
+    # Upload episodes (recursive — handles BTC/market_data.npy, BTC/features.pkl, etc.)
+    python scripts/r2_sync.py upload --prefix episodes --data-dir data/episodes --recursive
+
+    # Download everything to RunPod
+    python scripts/r2_sync.py download --prefix processed --data-dir data/datasets
+    python scripts/r2_sync.py download --prefix episodes --data-dir data/episodes
 
     # List files in bucket
-    python scripts/r2_sync.py list
+    python scripts/r2_sync.py list --prefix episodes
 """
 
 from __future__ import annotations
@@ -39,6 +43,7 @@ R2_BUCKET_NAME = os.getenv("R2_BUCKET_NAME", "moleapp-rl-data")
 R2_PREFIXES = {
     "raw": "raw/",               # Raw Binance Vision CSV backups
     "processed": "processed/1h/", # Validated, training-ready parquets
+    "episodes": "episodes/",      # Pre-built episodes (market_data.npy + features.pkl per asset)
     "sweeps": "sweeps/",          # Future: 6-month slices for W&B sweeps
     "legacy": "raw-data/",        # Legacy HL dumps (backward compat)
 }
@@ -70,9 +75,13 @@ def upload_data(
     data_dir: str = "data/datasets",
     prefix: str = R2_PREFIX,
     file_glob: str = "*.parquet",
+    recursive: bool = False,
 ) -> int:
     """
-    Upload all .parquet files from data_dir to R2.
+    Upload files from data_dir to R2.
+
+    When recursive=True, walks the entire directory tree and preserves
+    relative paths (e.g. data/episodes/BTC/market_data.npy → episodes/BTC/market_data.npy).
 
     Returns number of files uploaded.
     """
@@ -83,17 +92,24 @@ def upload_data(
         logger.error(f"Data directory not found: {data_path}")
         return 0
 
-    files = list(data_path.glob(file_glob))
+    if recursive:
+        files = [f for f in data_path.rglob("*") if f.is_file()]
+    else:
+        files = list(data_path.glob(file_glob))
+
     if not files:
-        logger.warning(f"No parquet files found in {data_path}")
+        logger.warning(f"No files found in {data_path}")
         return 0
 
     uploaded = 0
+    total_size = 0
     for file_path in sorted(files):
-        key = f"{prefix}{file_path.name}"
+        rel_path = file_path.relative_to(data_path)
+        key = f"{prefix}{rel_path}"
         file_size_mb = file_path.stat().st_size / (1024 * 1024)
+        total_size += file_path.stat().st_size
 
-        logger.info(f"Uploading {file_path.name} ({file_size_mb:.1f} MB) → s3://{R2_BUCKET_NAME}/{key}")
+        logger.info(f"Uploading {rel_path} ({file_size_mb:.1f} MB) → s3://{R2_BUCKET_NAME}/{key}")
 
         try:
             client.upload_file(
@@ -104,15 +120,18 @@ def upload_data(
             )
             uploaded += 1
         except Exception as e:
-            logger.error(f"Failed to upload {file_path.name}: {e}")
+            logger.error(f"Failed to upload {rel_path}: {e}")
 
-    logger.info(f"Uploaded {uploaded}/{len(files)} files to R2")
+    logger.info(f"Uploaded {uploaded}/{len(files)} files ({total_size / (1024*1024):.1f} MB) to R2")
     return uploaded
 
 
 def download_data(data_dir: str = "data/datasets", prefix: str = R2_PREFIX) -> int:
     """
-    Download all parquet files from R2 to local data_dir.
+    Download all files from R2 prefix to local data_dir.
+
+    Preserves subdirectory structure (e.g. episodes/BTC/market_data.npy
+    → data/episodes/BTC/market_data.npy).
 
     Returns number of files downloaded.
     """
@@ -120,37 +139,50 @@ def download_data(data_dir: str = "data/datasets", prefix: str = R2_PREFIX) -> i
     data_path = Path(data_dir)
     data_path.mkdir(parents=True, exist_ok=True)
 
-    # List objects under prefix
-    try:
-        response = client.list_objects_v2(Bucket=R2_BUCKET_NAME, Prefix=prefix)
-    except Exception as e:
-        logger.error(f"Failed to list R2 objects: {e}")
-        return 0
+    # Paginate through all objects under prefix
+    all_contents = []
+    continuation_token = None
+    while True:
+        kwargs = {"Bucket": R2_BUCKET_NAME, "Prefix": prefix, "MaxKeys": 1000}
+        if continuation_token:
+            kwargs["ContinuationToken"] = continuation_token
+        try:
+            response = client.list_objects_v2(**kwargs)
+        except Exception as e:
+            logger.error(f"Failed to list R2 objects: {e}")
+            return 0
 
-    contents = response.get("Contents", [])
-    if not contents:
+        all_contents.extend(response.get("Contents", []))
+        if not response.get("IsTruncated"):
+            break
+        continuation_token = response["NextContinuationToken"]
+
+    if not all_contents:
         logger.warning(f"No files found in s3://{R2_BUCKET_NAME}/{prefix}")
         return 0
 
     downloaded = 0
-    for obj in contents:
+    total_size = 0
+    for obj in all_contents:
         key = obj["Key"]
-        filename = key.removeprefix(prefix)
-        if not filename or not filename.endswith(".parquet"):
+        rel_path = key.removeprefix(prefix)
+        if not rel_path:
             continue
 
-        local_path = data_path / filename
+        local_path = data_path / rel_path
+        local_path.parent.mkdir(parents=True, exist_ok=True)
         size_mb = obj["Size"] / (1024 * 1024)
+        total_size += obj["Size"]
 
-        logger.info(f"Downloading {filename} ({size_mb:.1f} MB)")
+        logger.info(f"Downloading {rel_path} ({size_mb:.1f} MB)")
 
         try:
             client.download_file(R2_BUCKET_NAME, key, str(local_path))
             downloaded += 1
         except Exception as e:
-            logger.error(f"Failed to download {filename}: {e}")
+            logger.error(f"Failed to download {rel_path}: {e}")
 
-    logger.info(f"Downloaded {downloaded} files to {data_path}")
+    logger.info(f"Downloaded {downloaded} files ({total_size / (1024*1024):.1f} MB) to {data_path}")
     return downloaded
 
 
@@ -193,12 +225,16 @@ if __name__ == "__main__":
         choices=list(R2_PREFIXES.keys()),
         help="R2 bucket prefix (default: legacy)",
     )
+    parser.add_argument(
+        "--recursive", action="store_true",
+        help="Upload all files recursively (for episodes with subdirectories)",
+    )
     args = parser.parse_args()
 
     prefix = R2_PREFIXES[args.prefix]
 
     if args.action == "upload":
-        upload_data(data_dir=args.data_dir, prefix=prefix)
+        upload_data(data_dir=args.data_dir, prefix=prefix, recursive=args.recursive)
     elif args.action == "download":
         download_data(data_dir=args.data_dir, prefix=prefix)
     elif args.action == "list":

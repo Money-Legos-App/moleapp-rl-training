@@ -24,7 +24,7 @@ import numpy as np
 import pandas as pd
 import ta
 
-from data.preprocessors.feature_engineer import MarketFeatures
+from data.preprocessors.feature_engineer import ASSET_ID_MAP, MarketFeatures
 
 logger = logging.getLogger(__name__)
 
@@ -83,7 +83,7 @@ class EpisodeBuilder:
         market_data = self._build_market_array(df)
 
         # Build MarketFeatures list
-        feature_list = self._build_feature_list(df, initial_capital)
+        feature_list = self._build_feature_list(df, initial_capital, asset)
 
         logger.info(
             f"Built episodes for {asset}: {len(df)} timesteps, "
@@ -228,6 +228,7 @@ class EpisodeBuilder:
         self,
         df: pd.DataFrame,
         initial_capital: float,
+        asset: str = "BTC",
     ) -> list[MarketFeatures]:
         """
         Build list of MarketFeatures, one per timestep.
@@ -310,6 +311,9 @@ class EpisodeBuilder:
                 fear_greed_index=50.0,
                 market_regime=0,
                 cross_asset_momentum=float(row.get("cross_asset_momentum", 0.0)),
+
+                # v1.1.0: Asset identity (liquidation distance set by env at runtime)
+                asset_id_normalized=ASSET_ID_MAP.get(asset, 0.0),
             )
             features.append(mf)
 
