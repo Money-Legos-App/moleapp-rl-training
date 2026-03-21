@@ -1,6 +1,6 @@
 [build-system]
 requires = ["setuptools>=68.0", "wheel"]
-build-backend = "setuptools.backends._legacy:_Backend"
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "moleapp-rl-training"
@@ -33,6 +33,9 @@ dev = [
     "ruff>=0.1.0",
     "mypy>=1.7.0",
 ]
+
+[tool.setuptools.packages.find]
+include = ["data*", "envs*", "training*", "evaluation*", "serving*", "scripts*"]
 
 [tool.ruff]
 target-version = "py311"
