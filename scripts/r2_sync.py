@@ -30,7 +30,7 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 # R2 config from env
-R2_ENDPOINT_URL = os.getenv("R2_ENDPOINT_URL", "")
+R2_ENDPOINT_URL = os.getenv("R2_ENDPOINT_URL", "https://9507330fe5a8c228ea49f6e5c6c6b659.r2.cloudflarestorage.com")
 R2_ACCESS_KEY_ID = os.getenv("R2_ACCESS_KEY_ID", "")
 R2_SECRET_ACCESS_KEY = os.getenv("R2_SECRET_ACCESS_KEY", "")
 R2_BUCKET_NAME = os.getenv("R2_BUCKET_NAME", "moleapp-rl-data")
