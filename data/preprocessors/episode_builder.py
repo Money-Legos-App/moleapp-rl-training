@@ -133,7 +133,7 @@ class EpisodeBuilder:
             logger.warning(f"No OI data for {asset}, deriving from volume")
             ohlcv["open_interest"] = ohlcv["volume"].ewm(span=24, adjust=False).mean()
 
-        ohlcv["open_interest"] = ohlcv["open_interest"].fillna(method="ffill").fillna(0.0)
+        ohlcv["open_interest"] = ohlcv["open_interest"].ffill().fillna(0.0)
 
         return ohlcv
 

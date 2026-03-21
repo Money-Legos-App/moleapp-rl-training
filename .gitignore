@@ -16,6 +16,8 @@ env/
 data/datasets/*.parquet
 data/datasets/*.csv
 data/datasets/*.pkl
+data/raw/
+data/episodes/
 
 # Model artifacts
 models/

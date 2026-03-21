@@ -16,15 +16,11 @@ import numpy as np
 import pandas as pd
 import requests
 
+from data.collectors.asset_config import ALLOWED_ASSETS
+
 logger = logging.getLogger(__name__)
 
 HL_INFO_URL = "https://api.hyperliquid.xyz/info"
-
-# MoleApp's 15 allowed assets
-ALLOWED_ASSETS = [
-    "BTC", "ETH", "SOL", "SUI", "SEI", "AVAX", "TAO", "FET",
-    "NEAR", "WIF", "POPCAT", "kPEPE", "DOGE", "PENDLE", "ARB",
-]
 
 TIMEFRAMES = {
     "1h": 3600,

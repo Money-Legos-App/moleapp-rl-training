@@ -14,7 +14,8 @@ from typing import Optional
 import pandas as pd
 import requests
 
-from data.collectors.hl_ohlcv_collector import ALLOWED_ASSETS, HL_INFO_URL
+from data.collectors.asset_config import ALLOWED_ASSETS
+from data.collectors.hl_ohlcv_collector import HL_INFO_URL
 
 logger = logging.getLogger(__name__)
 

@@ -72,6 +72,7 @@ def train(
     profile: str,
     config_path: str,
     data_dir: str = "data/datasets",
+    episode_dir: str = "data/episodes",
     output_dir: str = "models",
     resume_from: str | None = None,
 ):
@@ -82,6 +83,7 @@ def train(
         profile: "shield", "builder", or "hunter"
         config_path: Path to YAML config file
         data_dir: Directory containing .parquet market data files
+        episode_dir: Directory with cached EpisodeBuilder output
         output_dir: Directory for model artifacts
         resume_from: Path to checkpoint to resume from (optional)
     """
@@ -93,7 +95,7 @@ def train(
     logger.info(f"Output directory: {output_path}")
 
     # Load market data
-    market_data, feature_data = _load_training_data(data_dir)
+    market_data, feature_data = _load_training_data(data_dir, episode_dir)
     logger.info(f"Loaded {len(market_data)} timesteps of market data")
 
     # Split train/eval (80/20)
@@ -205,96 +207,42 @@ def train(
     return model
 
 
-def _load_training_data(data_dir: str):
+def _load_training_data(data_dir: str, episode_dir: str = "data/episodes"):
     """
-    Load and merge market data from parquet files.
+    Load market data and features for training.
+
+    Prefers cached EpisodeBuilder output (full 47-dim features with proper
+    technical indicators). Falls back to simplified inline computation
+    if episodes haven't been built yet.
 
     Returns:
-        market_data: np.ndarray of shape (timesteps, 6) — OHLCV + funding
+        market_data: np.ndarray of shape (timesteps, 7) — OHLCV + funding + OI
         feature_data: list of MarketFeatures (one per timestep)
     """
-    import pandas as pd
-    from data.preprocessors.feature_engineer import MarketFeatures
+    import pickle
 
-    data_path = Path(data_dir)
-    # For now, load BTC as the primary training asset
-    # TODO: Multi-asset training with asset rotation
-    btc_file = list(data_path.glob("BTC_1h_*.parquet"))
-    if not btc_file:
-        raise FileNotFoundError(f"No BTC data found in {data_dir}")
+    # Try cached EpisodeBuilder output first
+    ep_path = Path(episode_dir) / "BTC"
+    market_path = ep_path / "market_data.npy"
+    features_path = ep_path / "features.pkl"
 
-    df = pd.read_parquet(btc_file[0])
-    logger.info(f"Loaded {len(df)} candles from {btc_file[0]}")
-
-    # Build market_data array: open, high, low, close, volume, funding_rate
-    market_data = np.zeros((len(df), 6), dtype=np.float32)
-    market_data[:, 0] = df["open"].values
-    market_data[:, 1] = df["high"].values
-    market_data[:, 2] = df["low"].values
-    market_data[:, 3] = df["close"].values
-    market_data[:, 4] = df["volume"].values
-    # funding_rate column 5 defaults to 0 if not available
-
-    # Build MarketFeatures list (simplified — full version computes all 47 features)
-    feature_data = []
-    for i in range(len(df)):
-        # Compute rolling stats with sufficient lookback
-        lookback_30d = max(0, i - 720)  # 720 hours = 30 days
-        close_prices = market_data[lookback_30d:i+1, 3]
-        volumes = market_data[lookback_30d:i+1, 4]
-
-        rolling_mean = float(np.mean(close_prices)) if len(close_prices) > 0 else market_data[i, 3]
-        rolling_vol = float(np.mean(volumes)) if len(volumes) > 0 else market_data[i, 4]
-
-        features = MarketFeatures(
-            price=float(market_data[i, 3]),
-            price_1h_ago=float(market_data[max(0, i-1), 3]),
-            price_4h_ago=float(market_data[max(0, i-4), 3]),
-            price_24h_ago=float(market_data[max(0, i-24), 3]),
-            vwap_24h=float(np.mean(market_data[max(0, i-24):i+1, 3])),
-            rolling_mean_30d=rolling_mean,
-            volume_24h=float(np.sum(market_data[max(0, i-24):i+1, 4])),
-            rolling_avg_vol_30d=rolling_vol,
-            bid_imbalance_pct=0.0,  # Not available in historical candles
-            spread_bps=1.0,  # Assume 1 bps spread
-            open_interest=0.0,  # Load from OI data if available
-            rolling_avg_oi_30d=0.0,
-            oi_1h_ago=0.0,
-            oi_4h_ago=0.0,
-            funding_rate=float(market_data[i, 5]),
-            funding_8h_cumulative=float(np.sum(market_data[max(0, i-8):i+1, 5])),
-            prev_funding_rate=float(market_data[max(0, i-1), 5]),
-            rsi_1h=50.0,  # TODO: Compute from ta library
-            rsi_4h=50.0,
-            macd_hist_1h=0.0,
-            bb_position_1h=0.5,
-            atr_1h=float(np.std(close_prices[-24:])) if len(close_prices) >= 24 else 0.0,
-            ema_20=float(np.mean(close_prices[-20:])) if len(close_prices) >= 20 else rolling_mean,
-            ema_50=float(np.mean(close_prices[-50:])) if len(close_prices) >= 50 else rolling_mean,
-            ema_200=float(np.mean(close_prices[-200:])) if len(close_prices) >= 200 else rolling_mean,
-            sma_4h=float(np.mean(close_prices[-4:])) if len(close_prices) >= 4 else rolling_mean,
-            volume_trend_1h=0.0,
-            roc_1h=0.0,
-            roc_4h=0.0,
-            account_value=1000.0,  # Overwritten by env
-            initial_capital=1000.0,
-            peak_account_value=1000.0,
-            open_position_count=0,
-            max_positions=5,
-            margin_utilization=0.0,
-            unrealized_pnl=0.0,
-            mission_start_timestamp=0.0,
-            current_timestamp=float(df.iloc[i]["timestamp"].timestamp()) if hasattr(df.iloc[i]["timestamp"], "timestamp") else 0.0,
-            days_since_last_trade=0.0,
-            has_open_position_this_asset=False,
-            existing_direction=0,
-            btc_dominance=50.0,
-            fear_greed_index=50.0,
-            market_regime=0,
-            cross_asset_momentum=0.0,
+    if market_path.exists() and features_path.exists():
+        market_data = np.load(market_path)
+        with open(features_path, "rb") as f:
+            feature_data = pickle.load(f)
+        logger.info(
+            f"Loaded cached episodes for BTC: {len(feature_data)} timesteps, "
+            f"market_data shape={market_data.shape}"
         )
-        feature_data.append(features)
+        return market_data, feature_data
 
+    # Fall back: build from parquets using EpisodeBuilder
+    logger.info("No cached episodes found, building from parquets...")
+    from data.preprocessors.episode_builder import EpisodeBuilder
+
+    builder = EpisodeBuilder(data_dir=data_dir)
+    market_data, feature_data = builder.build_episodes("BTC")
+    logger.info(f"Built {len(feature_data)} timesteps from {data_dir}")
     return market_data, feature_data
 
 
@@ -314,7 +262,12 @@ def main():
     parser.add_argument(
         "--data-dir",
         default="data/datasets",
-        help="Directory containing market data",
+        help="Directory containing market data parquets",
+    )
+    parser.add_argument(
+        "--episode-dir",
+        default="data/episodes",
+        help="Directory with cached EpisodeBuilder output",
     )
     parser.add_argument(
         "--output-dir",
@@ -334,6 +287,7 @@ def main():
         profile=args.profile,
         config_path=args.config,
         data_dir=args.data_dir,
+        episode_dir=args.episode_dir,
         output_dir=args.output_dir,
         resume_from=args.resume,
     )

@@ -34,7 +34,15 @@ R2_ENDPOINT_URL = os.getenv("R2_ENDPOINT_URL", "https://9507330fe5a8c228ea49f6e5
 R2_ACCESS_KEY_ID = os.getenv("R2_ACCESS_KEY_ID", "")
 R2_SECRET_ACCESS_KEY = os.getenv("R2_SECRET_ACCESS_KEY", "")
 R2_BUCKET_NAME = os.getenv("R2_BUCKET_NAME", "moleapp-rl-data")
-R2_PREFIX = "raw-data/"  # All raw parquet files go under this prefix
+
+# Bucket prefix structure
+R2_PREFIXES = {
+    "raw": "raw/",               # Raw Binance Vision CSV backups
+    "processed": "processed/1h/", # Validated, training-ready parquets
+    "sweeps": "sweeps/",          # Future: 6-month slices for W&B sweeps
+    "legacy": "raw-data/",        # Legacy HL dumps (backward compat)
+}
+R2_PREFIX = R2_PREFIXES["legacy"]  # Default for backward compat
 
 
 def get_r2_client():
@@ -58,7 +66,11 @@ def get_r2_client():
     )
 
 
-def upload_data(data_dir: str = "data/datasets", prefix: str = R2_PREFIX) -> int:
+def upload_data(
+    data_dir: str = "data/datasets",
+    prefix: str = R2_PREFIX,
+    file_glob: str = "*.parquet",
+) -> int:
     """
     Upload all .parquet files from data_dir to R2.
 
@@ -71,7 +83,7 @@ def upload_data(data_dir: str = "data/datasets", prefix: str = R2_PREFIX) -> int
         logger.error(f"Data directory not found: {data_path}")
         return 0
 
-    files = list(data_path.glob("*.parquet"))
+    files = list(data_path.glob(file_glob))
     if not files:
         logger.warning(f"No parquet files found in {data_path}")
         return 0
@@ -176,11 +188,18 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Cloudflare R2 data sync")
     parser.add_argument("action", choices=["upload", "download", "list"])
     parser.add_argument("--data-dir", default="data/datasets")
+    parser.add_argument(
+        "--prefix", default="legacy",
+        choices=list(R2_PREFIXES.keys()),
+        help="R2 bucket prefix (default: legacy)",
+    )
     args = parser.parse_args()
 
+    prefix = R2_PREFIXES[args.prefix]
+
     if args.action == "upload":
-        upload_data(data_dir=args.data_dir)
+        upload_data(data_dir=args.data_dir, prefix=prefix)
     elif args.action == "download":
-        download_data(data_dir=args.data_dir)
+        download_data(data_dir=args.data_dir, prefix=prefix)
     elif args.action == "list":
-        list_files()
+        list_files(prefix=prefix)

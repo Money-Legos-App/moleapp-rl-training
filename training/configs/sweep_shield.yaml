@@ -1,0 +1,36 @@
+# W&B Sweep — Shield Agent PPO Hyperparameter Optimization
+# =========================================================
+# Usage:
+#   wandb sweep training/configs/sweep_shield.yaml
+#   wandb agent dapps4africa/MoleApp-RL/<SWEEP_ID>
+
+program: training/sweep_agent.py
+method: bayes
+
+metric:
+  name: eval/sharpe_ratio
+  goal: maximize
+
+parameters:
+  learning_rate:
+    distribution: log_uniform_values
+    min: 1e-5
+    max: 1e-3
+  ent_coef:
+    distribution: log_uniform_values
+    min: 0.001
+    max: 0.05
+  batch_size:
+    values: [256, 512, 1024, 2048]
+  gamma:
+    distribution: uniform
+    min: 0.98
+    max: 0.999
+
+# Kill underperforming runs early (saves ~60% GPU budget)
+early_terminate:
+  type: hyperband
+  min_iter: 500000
+  eta: 3
+
+run_cap: 30

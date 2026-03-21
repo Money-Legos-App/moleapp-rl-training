@@ -83,10 +83,9 @@ def push_episodes(
         tags=["dataset", f"feature-v{FEATURE_VERSION}", f"hash-{FEATURE_HASH}"],
     )
 
-    # Create artifact
-    artifact_name = f"{ARTIFACT_BASE_NAME}-v{version}"
+    # Create artifact (W&B handles versioning via :v0, :v1, :latest)
     artifact = wandb.Artifact(
-        name=artifact_name,
+        name=ARTIFACT_BASE_NAME,
         type=ARTIFACT_TYPE,
         description=description or f"RL episode dataset v{version} (feature hash: {FEATURE_HASH})",
         metadata={
@@ -95,6 +94,9 @@ def push_episodes(
             "num_assets": len(asset_dirs),
             "assets": sorted([d.name for d in asset_dirs]),
             "dataset_version": version,
+            "r2_bucket": os.getenv("R2_BUCKET_NAME", "moleapp-rl-data"),
+            "r2_processed_prefix": "processed/1h/",
+            "data_source": "binance_vision",
         },
     )
 
@@ -112,8 +114,8 @@ def push_episodes(
     run.log_artifact(artifact)
     run.finish()
 
-    full_name = f"{WANDB_PROJECT}/{artifact_name}"
-    logger.info(f"Pushed artifact: {full_name}")
+    full_name = f"{WANDB_PROJECT}/{ARTIFACT_BASE_NAME}"
+    logger.info(f"Pushed artifact: {full_name} (version {version})")
     logger.info(f"Feature hash: {FEATURE_HASH} (version {FEATURE_VERSION})")
 
     return full_name
@@ -139,14 +141,10 @@ def pull_episodes(
         job_type="dataset-download",
     )
 
-    artifact_name = f"{ARTIFACT_BASE_NAME}-v{version}:{version}" if version != "latest" else f"{ARTIFACT_BASE_NAME}:latest"
-
-    # Try exact name first, fall back to latest
-    try:
-        artifact = run.use_artifact(artifact_name)
-    except wandb.errors.CommError:
-        logger.warning(f"Artifact '{artifact_name}' not found, trying latest...")
-        artifact = run.use_artifact(f"{ARTIFACT_BASE_NAME}:latest")
+    # W&B artifact refs: "name:latest", "name:v0", "name:v1", etc.
+    artifact_ref = f"{ARTIFACT_BASE_NAME}:{version}"
+    artifact = run.use_artifact(artifact_ref)
+    logger.info(f"Resolved artifact: {artifact.name} (version {artifact.version})")
 
     # Check feature hash compatibility
     remote_hash = artifact.metadata.get("feature_hash", "")
