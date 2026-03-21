@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Data (large files)
+data/datasets/*.parquet
+data/datasets/*.csv
+data/datasets/*.pkl
+
+# Model artifacts
+models/
+*.onnx
+*.vecnorm.pkl
+*.zip
+
+# IDE
+.vscode/
+.idea/
+
+# Environment
+.env
+.env.local
+
+# W&B
+wandb/
+
+# RunPod
+*.tar.gz
+
+# OS
+.DS_Store
+Thumbs.db

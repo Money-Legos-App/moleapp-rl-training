@@ -1,0 +1,55 @@
+# Shield (CONSERVATIVE) PPO Training Configuration
+# Target: Sharpe > 1.0, Max Drawdown < 10%, Win Rate > 60%
+
+model: PPO
+env: ShieldTradingEnv
+
+# PPO Hyperparameters
+total_timesteps: 10_000_000     # ~40h on A100, ~120h on T4
+n_steps: 2048                    # Steps before each PPO update
+batch_size: 64                   # Mini-batch size for each gradient step
+n_epochs: 10                     # Passes over collected batch
+learning_rate: 0.0003
+gamma: 0.99                      # High discount — Shield cares about long-term stability
+gae_lambda: 0.95                 # GAE for advantage estimation
+clip_range: 0.2                  # PPO clipping parameter
+ent_coef: 0.01                   # Entropy bonus for exploration
+vf_coef: 0.5                     # Value function coefficient
+max_grad_norm: 0.5               # Gradient clipping
+
+# Policy Network
+policy: MlpPolicy
+policy_kwargs:
+  net_arch: [256, 256, 128]      # 3-layer MLP
+  activation_fn: tanh
+
+# Environment Parameters (override defaults)
+env_kwargs:
+  max_leverage: 1
+  max_positions: 2
+  initial_capital: 1000.0
+  max_sl_pct: 0.03
+  min_sl_pct: 0.005
+  max_tp_pct: 0.06
+  min_tp_pct: 0.01
+  episode_length: 2880           # 30 days of 15-min steps
+
+# VecNormalize
+normalize_observations: true
+normalize_rewards: true
+norm_obs_clip: 10.0
+norm_reward_clip: 10.0
+
+# Evaluation
+eval_freq: 50000                 # Evaluate every 50k steps
+n_eval_episodes: 20
+deterministic_eval: true
+
+# Checkpointing
+checkpoint_freq: 200000          # Save every 200k steps
+save_best_model: true
+
+# W&B Logging
+wandb_project: moleapp-rl
+wandb_run_name: shield-v1
+wandb_tags: ["shield", "conservative", "ppo"]
