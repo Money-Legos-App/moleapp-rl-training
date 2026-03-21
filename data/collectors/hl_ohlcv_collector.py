@@ -153,9 +153,25 @@ def fetch_all_history(
     full_df = full_df.drop_duplicates(subset=["timestamp"]).sort_values("timestamp")
     full_df = full_df.reset_index(drop=True)
 
+    # Validate before saving — catch glitches before they poison training
+    from data.validators.validate_hl_data import validate_dataset
+    validation = validate_dataset(full_df, asset=asset, timeframe=timeframe)
+    logger.info(f"Validation for {asset}: {len(validation.errors)} errors, {len(validation.warnings)} warnings")
+
+    if not validation.passed:
+        logger.error(f"DATA VALIDATION FAILED for {asset}:\n{validation.summary()}")
+        raise ValueError(
+            f"Data validation failed for {asset} {timeframe}. "
+            f"{len(validation.errors)} errors found. "
+            f"Fix the data or investigate the timestamps above before training."
+        )
+
+    if validation.warnings:
+        logger.warning(f"Validation warnings for {asset}:\n{validation.summary()}")
+
     file_path = output_path / f"{asset}_{timeframe}_{lookback_days}d.parquet"
     full_df.to_parquet(file_path, index=False)
-    logger.info(f"Saved {len(full_df)} candles to {file_path}")
+    logger.info(f"Saved {len(full_df)} validated candles to {file_path}")
 
     return file_path
 
