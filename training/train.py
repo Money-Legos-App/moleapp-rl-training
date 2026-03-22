@@ -1,6 +1,6 @@
 """
-Unified Training Script for Shield, Builder, and Hunter Models
-================================================================
+Unified Training Script for Shield, Builder, and Hunter Models (RLlib)
+=======================================================================
 Usage:
     python -m training.train --profile shield --config training/configs/shield_config.yaml
     python -m training.train --profile builder --config training/configs/builder_config.yaml
@@ -15,24 +15,14 @@ import pickle
 from pathlib import Path
 
 import numpy as np
+import ray
 import yaml
-from stable_baselines3 import PPO
-from stable_baselines3.common.callbacks import (
-    CheckpointCallback,
-    EvalCallback,
-)
-from stable_baselines3.common.monitor import Monitor
-from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
+from ray.rllib.algorithms.ppo import PPOConfig
+from ray.rllib.algorithms.algorithm import Algorithm
 
-from envs import BuilderTradingEnv, HunterTradingEnv, ShieldTradingEnv
+from envs import ENV_MAP
 
 logger = logging.getLogger(__name__)
-
-ENV_MAP = {
-    "shield": ShieldTradingEnv,
-    "builder": BuilderTradingEnv,
-    "hunter": HunterTradingEnv,
-}
 
 
 def load_config(config_path: str) -> dict:
@@ -41,187 +31,14 @@ def load_config(config_path: str) -> dict:
         return yaml.safe_load(f)
 
 
-def build_env(profile: str, config: dict, market_data: np.ndarray, feature_data: list):
-    """Build a VecNormalize-wrapped environment."""
-    env_cls = ENV_MAP[profile]
-    env_kwargs = config.get("env_kwargs", {})
-
-    def make_env():
-        env = env_cls(
-            market_data=market_data,
-            feature_data=feature_data,
-            **env_kwargs,
-        )
-        return Monitor(env)
-
-    vec_env = DummyVecEnv([make_env])
-
-    if config.get("normalize_observations", True):
-        vec_env = VecNormalize(
-            vec_env,
-            norm_obs=True,
-            norm_reward=config.get("normalize_rewards", True),
-            clip_obs=config.get("norm_obs_clip", 10.0),
-            clip_reward=config.get("norm_reward_clip", 10.0),
-        )
-
-    return vec_env
-
-
-def train(
-    profile: str,
-    config_path: str,
-    data_dir: str = "data/datasets",
-    episode_dir: str = "data/episodes",
-    output_dir: str = "models",
-    resume_from: str | None = None,
-):
-    """
-    Train a PPO model for the specified risk profile.
-
-    Args:
-        profile: "shield", "builder", or "hunter"
-        config_path: Path to YAML config file
-        data_dir: Directory containing .parquet market data files
-        episode_dir: Directory with cached EpisodeBuilder output
-        output_dir: Directory for model artifacts
-        resume_from: Path to checkpoint to resume from (optional)
-    """
-    config = load_config(config_path)
-    output_path = Path(output_dir) / profile
-    output_path.mkdir(parents=True, exist_ok=True)
-
-    logger.info(f"Training {profile} model with config: {config_path}")
-    logger.info(f"Output directory: {output_path}")
-
-    # Load market data
-    market_data, feature_data = _load_training_data(data_dir, episode_dir)
-    logger.info(f"Loaded {len(market_data)} timesteps of market data")
-
-    # Split train/eval (80/20)
-    split_idx = int(len(market_data) * 0.8)
-    train_market = market_data[:split_idx]
-    train_features = feature_data[:split_idx]
-    eval_market = market_data[split_idx:]
-    eval_features = feature_data[split_idx:]
-
-    # Build environments
-    train_env = build_env(profile, config, train_market, train_features)
-    eval_env = build_env(profile, config, eval_market, eval_features)
-
-    # Callbacks
-    checkpoint_cb = CheckpointCallback(
-        save_freq=config.get("checkpoint_freq", 200000),
-        save_path=str(output_path / "checkpoints"),
-        name_prefix=profile,
-    )
-    eval_cb = EvalCallback(
-        eval_env,
-        best_model_save_path=str(output_path / "best"),
-        log_path=str(output_path / "eval_logs"),
-        eval_freq=config.get("eval_freq", 50000),
-        n_eval_episodes=config.get("n_eval_episodes", 20),
-        deterministic=config.get("deterministic_eval", True),
-    )
-
-    # Build or load model
-    policy_kwargs = config.get("policy_kwargs", {})
-    # Convert activation_fn string to actual function
-    if "activation_fn" in policy_kwargs:
-        import torch.nn as nn
-        activation_map = {"tanh": nn.Tanh, "relu": nn.ReLU, "elu": nn.ELU}
-        policy_kwargs["activation_fn"] = activation_map.get(
-            policy_kwargs["activation_fn"], nn.Tanh
-        )
-
-    if resume_from:
-        logger.info(f"Resuming from checkpoint: {resume_from}")
-        model = PPO.load(resume_from, env=train_env)
-    else:
-        model = PPO(
-            policy=config.get("policy", "MlpPolicy"),
-            env=train_env,
-            learning_rate=config.get("learning_rate", 3e-4),
-            n_steps=config.get("n_steps", 2048),
-            batch_size=config.get("batch_size", 64),
-            n_epochs=config.get("n_epochs", 10),
-            gamma=config.get("gamma", 0.99),
-            gae_lambda=config.get("gae_lambda", 0.95),
-            clip_range=config.get("clip_range", 0.2),
-            ent_coef=config.get("ent_coef", 0.01),
-            vf_coef=config.get("vf_coef", 0.5),
-            max_grad_norm=config.get("max_grad_norm", 0.5),
-            policy_kwargs=policy_kwargs,
-            verbose=1,
-            tensorboard_log=str(output_path / "tb_logs"),
-        )
-
-    # Optional: W&B integration
-    try:
-        import wandb
-        wandb_config = {
-            "project": config.get("wandb_project", "moleapp-rl"),
-            "name": config.get("wandb_run_name", f"{profile}-v1"),
-            "tags": config.get("wandb_tags", [profile]),
-            "config": config,
-        }
-        wandb.init(**wandb_config)
-        logger.info("W&B initialized")
-    except ImportError:
-        logger.info("W&B not installed, skipping")
-
-    # Train
-    total_timesteps = config.get("total_timesteps", 10_000_000)
-    logger.info(f"Starting training for {total_timesteps} timesteps...")
-
-    model.learn(
-        total_timesteps=total_timesteps,
-        callback=[checkpoint_cb, eval_cb],
-        progress_bar=True,
-    )
-
-    # Save final model
-    final_path = output_path / f"{profile}_final"
-    model.save(str(final_path))
-    logger.info(f"Saved final model to {final_path}")
-
-    # Save VecNormalize statistics (CRITICAL for production inference)
-    if isinstance(train_env, VecNormalize):
-        vecnorm_path = output_path / f"{profile}_vecnorm.pkl"
-        train_env.save(str(vecnorm_path))
-        logger.info(f"Saved VecNormalize stats to {vecnorm_path}")
-
-        # Also export as raw numpy for production use
-        vecnorm_data = {
-            "obs_rms_mean": train_env.obs_rms.mean.copy(),
-            "obs_rms_var": train_env.obs_rms.var.copy(),
-            "obs_rms_count": train_env.obs_rms.count,
-            "clip_obs": train_env.clip_obs,
-        }
-        raw_stats_path = output_path / f"{profile}_norm_stats.pkl"
-        with open(raw_stats_path, "wb") as f:
-            pickle.dump(vecnorm_data, f)
-        logger.info(f"Saved raw norm stats to {raw_stats_path}")
-
-    logger.info(f"Training complete for {profile}")
-    return model
-
-
 def _load_training_data(data_dir: str, episode_dir: str = "data/episodes"):
     """
     Load market data and features for training.
-
-    Prefers cached EpisodeBuilder output (full 47-dim features with proper
-    technical indicators). Falls back to simplified inline computation
-    if episodes haven't been built yet.
 
     Returns:
         market_data: np.ndarray of shape (timesteps, 7) — OHLCV + funding + OI
         feature_data: list of MarketFeatures (one per timestep)
     """
-    import pickle
-
-    # Try cached EpisodeBuilder output first
     ep_path = Path(episode_dir) / "BTC"
     market_path = ep_path / "market_data.npy"
     features_path = ep_path / "features.pkl"
@@ -236,7 +53,6 @@ def _load_training_data(data_dir: str, episode_dir: str = "data/episodes"):
         )
         return market_data, feature_data
 
-    # Fall back: build from parquets using EpisodeBuilder
     logger.info("No cached episodes found, building from parquets...")
     from data.preprocessors.episode_builder import EpisodeBuilder
 
@@ -246,8 +62,251 @@ def _load_training_data(data_dir: str, episode_dir: str = "data/episodes"):
     return market_data, feature_data
 
 
+def build_ppo_config(profile: str, config: dict, env_config: dict) -> PPOConfig:
+    """Build an RLlib PPOConfig from YAML config dict."""
+    env_name = ENV_MAP[profile]
+
+    ppo_config = (
+        PPOConfig()
+        .environment(
+            env=env_name,
+            env_config=env_config,
+        )
+        .env_runners(
+            num_env_runners=config.get("num_env_runners", 4),
+            num_envs_per_env_runner=config.get("num_envs_per_env_runner", 1),
+            observation_filter=config.get("observation_filter", "MeanStdFilter"),
+        )
+        .training(
+            lr=config.get("lr", 3e-4),
+            gamma=config.get("gamma", 0.99),
+            lambda_=config.get("lambda_", 0.95),
+            clip_param=config.get("clip_param", 0.2),
+            num_epochs=config.get("num_epochs", 10),
+            minibatch_size=config.get("minibatch_size", 64),
+            train_batch_size_per_learner=config.get("train_batch_size_per_learner", 2048),
+            entropy_coeff=config.get("entropy_coeff", 0.01),
+            vf_loss_coeff=config.get("vf_loss_coeff", 0.5),
+            grad_clip=config.get("grad_clip", 0.5),
+            model=config.get("model", {
+                "fcnet_hiddens": [256, 256, 128],
+                "fcnet_activation": "tanh",
+            }),
+        )
+        .evaluation(
+            evaluation_interval=config.get("evaluation", {}).get("evaluation_interval", 25),
+            evaluation_duration=config.get("evaluation", {}).get("evaluation_duration", 20),
+            evaluation_num_env_runners=config.get("evaluation", {}).get("num_env_runners", 1),
+            evaluation_config=PPOConfig.overrides(explore=False),
+        )
+        .callbacks(
+            callbacks_class=_get_callbacks_class(),
+        )
+    )
+
+    # Multi-GPU support
+    num_gpus = config.get("num_gpus", 0)
+    if num_gpus > 0:
+        ppo_config.learners(
+            num_learners=config.get("num_learners", 1),
+            num_gpus_per_learner=config.get("num_gpus_per_learner", 1),
+        )
+
+    return ppo_config
+
+
+def _get_callbacks_class():
+    """Import callbacks lazily to avoid circular imports."""
+    from training.callbacks.trading_callbacks import TradingCallbacks
+    return TradingCallbacks
+
+
+def train(
+    profile: str,
+    config_path: str,
+    data_dir: str = "data/datasets",
+    episode_dir: str = "data/episodes",
+    output_dir: str = "models",
+    resume_from: str | None = None,
+):
+    """
+    Train a PPO model for the specified risk profile using RLlib.
+
+    Args:
+        profile: "shield", "builder", or "hunter"
+        config_path: Path to YAML config file
+        data_dir: Directory containing .parquet market data files
+        episode_dir: Directory with cached EpisodeBuilder output
+        output_dir: Directory for model artifacts
+        resume_from: Path to checkpoint to resume from (optional)
+    """
+    config = load_config(config_path)
+    output_path = Path(output_dir) / profile
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    logger.info(f"Training {profile} model with config: {config_path}")
+
+    # Load market data
+    market_data, feature_data = _load_training_data(data_dir, episode_dir)
+    logger.info(f"Loaded {len(market_data)} timesteps of market data")
+
+    # Split train/eval (80/20)
+    split_idx = int(len(market_data) * 0.8)
+    train_market = market_data[:split_idx]
+    train_features = feature_data[:split_idx]
+
+    # Build env_config with market data + env_kwargs
+    env_kwargs = config.get("env_config", config.get("env_kwargs", {}))
+    env_config = {
+        "market_data": train_market,
+        "feature_data": train_features,
+        **env_kwargs,
+    }
+
+    # Initialize Ray
+    if not ray.is_initialized():
+        ray.init(ignore_reinit_error=True)
+
+    # Build algorithm
+    if resume_from:
+        logger.info(f"Resuming from checkpoint: {resume_from}")
+        algo = Algorithm.from_checkpoint(resume_from)
+    else:
+        ppo_config = build_ppo_config(profile, config, env_config)
+
+        # Set eval env config with eval data
+        eval_market = market_data[split_idx:]
+        eval_features = feature_data[split_idx:]
+        eval_env_config = {
+            "market_data": eval_market,
+            "feature_data": eval_features,
+            **env_kwargs,
+        }
+        ppo_config.evaluation(evaluation_config=PPOConfig.overrides(
+            env_config=eval_env_config,
+            explore=False,
+        ))
+
+        algo = ppo_config.build()
+
+    # W&B integration
+    wandb_run = None
+    try:
+        import wandb
+        wandb_cfg = config.get("wandb", {})
+        wandb_run = wandb.init(
+            project=wandb_cfg.get("project", "moleapp-rl"),
+            name=wandb_cfg.get("run_name", f"{profile}-rllib"),
+            tags=wandb_cfg.get("tags", [profile, "ppo", "rllib"]),
+            config=config,
+        )
+        logger.info("W&B initialized")
+    except ImportError:
+        logger.info("W&B not installed, skipping")
+
+    # Training loop
+    total_timesteps = config.get("total_timesteps", 10_000_000)
+    checkpoint_freq = config.get("checkpoint_freq", 10)  # iterations
+    checkpoint_dir = output_path / "checkpoints"
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+
+    logger.info(f"Starting training for {total_timesteps} timesteps...")
+
+    iteration = 0
+    total_steps = 0
+
+    while total_steps < total_timesteps:
+        result = algo.train()
+        iteration += 1
+        total_steps = result.get("timesteps_total", result.get("num_env_steps_sampled_lifetime", 0))
+
+        # Log to W&B
+        if wandb_run:
+            log_data = {
+                "train/timesteps": total_steps,
+                "train/episode_reward_mean": result.get("env_runners", {}).get("episode_reward_mean", 0),
+                "train/episode_len_mean": result.get("env_runners", {}).get("episode_len_mean", 0),
+            }
+
+            # Learner stats
+            learner_info = result.get("info", {}).get("learner", {}).get("default_policy", {})
+            if learner_info:
+                log_data["train/policy_loss"] = learner_info.get("policy_loss", 0)
+                log_data["train/vf_loss"] = learner_info.get("vf_loss", 0)
+                log_data["train/entropy"] = learner_info.get("entropy", 0)
+
+            # Trading-specific metrics from TradingCallbacks (logged via metrics_logger)
+            env_runners = result.get("env_runners", {})
+            for metric_key in ("total_return", "max_drawdown", "win_rate", "total_trades", "total_pnl"):
+                val = env_runners.get(metric_key, None)
+                if val is not None:
+                    # metrics_logger stores mean by default
+                    log_data[f"train/{metric_key}"] = val
+
+            # Eval metrics
+            eval_results = result.get("evaluation", {})
+            if eval_results:
+                eval_runners = eval_results.get("env_runners", {})
+                log_data["eval/episode_reward_mean"] = eval_runners.get("episode_reward_mean", 0)
+                for metric_key in ("total_return", "max_drawdown", "win_rate", "total_trades", "total_pnl"):
+                    val = eval_runners.get(metric_key, None)
+                    if val is not None:
+                        log_data[f"eval/{metric_key}"] = val
+
+            wandb.log(log_data, step=total_steps)
+
+        # Console progress
+        if iteration % 5 == 0:
+            reward_mean = result.get("env_runners", {}).get("episode_reward_mean", 0)
+            logger.info(
+                f"[Iter {iteration}] steps={total_steps:,} "
+                f"reward={reward_mean:.2f}"
+            )
+
+        # Checkpoint
+        if iteration % checkpoint_freq == 0:
+            ckpt_path = algo.save_to_path(str(checkpoint_dir / f"checkpoint_{iteration:06d}"))
+            logger.info(f"Saved checkpoint: {ckpt_path}")
+
+    # Save final model
+    final_path = str(output_path / f"{profile}_final")
+    algo.save_to_path(final_path)
+    logger.info(f"Saved final model to {final_path}")
+
+    # Extract and save observation normalization stats (MeanStdFilter)
+    _save_norm_stats(algo, output_path, profile)
+
+    # Cleanup
+    if wandb_run:
+        wandb.finish()
+    algo.stop()
+
+    logger.info(f"Training complete for {profile}")
+    return algo
+
+
+def _save_norm_stats(algo, output_path: Path, profile: str):
+    """Extract MeanStdFilter stats and save in production-compatible format."""
+    try:
+        filters = algo.env_runner.filters
+        if "default_policy" in filters:
+            obs_filter = filters["default_policy"]
+            norm_stats = {
+                "obs_rms_mean": np.array(obs_filter.rs.mean, dtype=np.float64),
+                "obs_rms_var": np.array(obs_filter.rs.var, dtype=np.float64),
+                "obs_rms_count": float(obs_filter.rs.count),
+                "clip_obs": 10.0,
+            }
+            stats_path = output_path / f"{profile}_norm_stats.pkl"
+            with open(stats_path, "wb") as f:
+                pickle.dump(norm_stats, f)
+            logger.info(f"Saved norm stats to {stats_path}")
+    except Exception as e:
+        logger.warning(f"Could not extract norm stats: {e}")
+
+
 def main():
-    parser = argparse.ArgumentParser(description="Train MoleApp RL models")
+    parser = argparse.ArgumentParser(description="Train MoleApp RL models (RLlib)")
     parser.add_argument(
         "--profile",
         required=True,

@@ -27,6 +27,7 @@ class ShieldTradingEnv(BaseTradingEnv):
         kwargs.setdefault("min_sl_pct", 0.005)
         kwargs.setdefault("max_tp_pct", 0.06)
         kwargs.setdefault("min_tp_pct", 0.01)
+        kwargs.setdefault("max_drawdown_pct", 0.10)  # 10% kill — matches risk_manager.py
         kwargs.setdefault("profile_name", "shield")
         super().__init__(**kwargs)
         self._last_close_step = 0
@@ -51,10 +52,8 @@ class ShieldTradingEnv(BaseTradingEnv):
         else:
             reward += pnl
 
-        # --- Drawdown penalty (heavy, kills at 10%) ---
-        if drawdown > 0.10:
-            reward -= 2.0  # Hard penalty — agent should learn to avoid this
-        elif drawdown > 0.05:
+        # --- Drawdown penalty (escalating — episode terminates at 10% via base env) ---
+        if drawdown > 0.05:
             reward -= drawdown * 5.0  # Escalating penalty above 5%
         else:
             reward -= drawdown * 0.5  # Mild awareness below 5%

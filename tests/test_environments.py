@@ -196,8 +196,9 @@ class TestRandomPolicyLosesMoney:
             total_abs_pnl += abs(info["total_pnl"])
 
         avg_fees = total_fees / n_runs
-        # Fees should be a meaningful cost (>$1 per episode)
-        assert avg_fees > 1.0, (
+        # Fees should be a meaningful cost (>$0.3 per episode)
+        # Lower threshold: confidence scaling reduces avg position size ~50%
+        assert avg_fees > 0.3, (
             f"Random agent should pay meaningful fees, got avg ${avg_fees:.2f}"
         )
 
@@ -531,7 +532,7 @@ class TestObservationShape:
                 break
 
     def test_obs_reasonable_ranges(self):
-        """Observation values should be within reasonable bounds before VecNormalize."""
+        """Observation values should be within reasonable bounds before MeanStdFilter."""
         market_data, features = _make_synthetic_data(n_steps=500)
         env = BaseTradingEnv(
             market_data=market_data,

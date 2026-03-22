@@ -1,27 +1,31 @@
-# Hunter (AGGRESSIVE) PPO Training Configuration
+# Hunter (AGGRESSIVE) PPO Training Configuration — RLlib
 # Target: Total Return > 50% on backtest, Drawdown acceptable up to 35%
 
-model: PPO
+algorithm: PPO
 env: HunterTradingEnv
 
 total_timesteps: 10_000_000
-n_steps: 2048
-batch_size: 64
-n_epochs: 10
-learning_rate: 0.0003
+
+lr: 0.0003
 gamma: 0.99
-gae_lambda: 0.95
-clip_range: 0.2
-ent_coef: 0.015                  # Slightly higher entropy for more exploration
-vf_coef: 0.5
-max_grad_norm: 0.5
+lambda_: 0.95
+clip_param: 0.2
+num_epochs: 10
+minibatch_size: 64
+train_batch_size_per_learner: 2048
+entropy_coeff: 0.015             # Slightly higher entropy for more exploration
+vf_loss_coeff: 0.5
+grad_clip: 0.5
 
-policy: MlpPolicy
-policy_kwargs:
-  net_arch: [256, 256, 128]
-  activation_fn: tanh
+model:
+  fcnet_hiddens: [256, 256, 128]
+  fcnet_activation: tanh
 
-env_kwargs:
+num_env_runners: 4
+num_envs_per_env_runner: 1
+observation_filter: MeanStdFilter
+
+env_config:
   max_leverage: 3
   max_positions: 5
   initial_capital: 1000.0
@@ -30,19 +34,20 @@ env_kwargs:
   max_tp_pct: 0.15
   min_tp_pct: 0.03
   episode_length: 2880
+  max_drawdown_pct: 0.30         # 30% kill switch — terminates episode
 
-normalize_observations: true
-normalize_rewards: true
-norm_obs_clip: 10.0
-norm_reward_clip: 10.0
+evaluation:
+  evaluation_interval: 25
+  evaluation_duration: 20
+  num_env_runners: 1
 
-eval_freq: 50000
-n_eval_episodes: 20
-deterministic_eval: true
+checkpoint_freq: 10
 
-checkpoint_freq: 200000
-save_best_model: true
+num_gpus: 0
+num_learners: 1
+num_gpus_per_learner: 1
 
-wandb_project: moleapp-rl
-wandb_run_name: hunter-v1
-wandb_tags: ["hunter", "aggressive", "ppo"]
+wandb:
+  project: moleapp-rl
+  run_name: hunter-v2-rllib
+  tags: ["hunter", "aggressive", "ppo", "rllib"]

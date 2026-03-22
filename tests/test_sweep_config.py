@@ -1,5 +1,5 @@
 """
-Tests for the W&B Sweep configuration, evaluation callback, and observation v1.1.0.
+Tests for the Ray Tune sweep configuration, trading callbacks, and observation v1.1.0.
 """
 
 from __future__ import annotations
@@ -20,67 +20,60 @@ from data.preprocessors.feature_engineer import (
 
 
 # ──────────────────────────────────────────────────────────────────────
-# Test: Sweep YAML Config
+# Test: Tune Sweep YAML Config
 # ──────────────────────────────────────────────────────────────────────
 
-SWEEP_CONFIG_PATH = Path("training/configs/sweep_shield.yaml")
+TUNE_CONFIG_PATH = Path("training/configs/tune_shield.yaml")
 
 
-class TestSweepConfig:
+class TestTuneSweepConfig:
     @pytest.fixture(autouse=True)
     def load_config(self):
-        assert SWEEP_CONFIG_PATH.exists(), f"Sweep config not found at {SWEEP_CONFIG_PATH}"
-        with open(SWEEP_CONFIG_PATH) as f:
+        assert TUNE_CONFIG_PATH.exists(), f"Tune config not found at {TUNE_CONFIG_PATH}"
+        with open(TUNE_CONFIG_PATH) as f:
             self.config = yaml.safe_load(f)
 
-    def test_method_is_bayes(self):
-        assert self.config["method"] == "bayes"
+    def test_method_is_asha(self):
+        assert self.config["sweep"]["method"] == "asha"
 
-    def test_metric_is_sharpe(self):
-        assert self.config["metric"]["name"] == "eval/sharpe_ratio"
-        assert self.config["metric"]["goal"] == "maximize"
+    def test_metric_configured(self):
+        assert self.config["sweep"]["metric"] == "env_runners/episode_reward_mean"
+        assert self.config["sweep"]["mode"] == "max"
 
     def test_all_four_params_present(self):
-        params = self.config["parameters"]
-        assert "learning_rate" in params
-        assert "ent_coef" in params
-        assert "batch_size" in params
+        params = self.config["sweep"]["parameters"]
+        assert "lr" in params
+        assert "entropy_coeff" in params
+        assert "minibatch_size" in params
         assert "gamma" in params
 
-    def test_learning_rate_range(self):
-        lr = self.config["parameters"]["learning_rate"]
+    def test_lr_range(self):
+        lr = self.config["sweep"]["parameters"]["lr"]
         assert float(lr["min"]) >= 1e-6
         assert float(lr["max"]) <= 1e-2
-        assert lr["distribution"] == "log_uniform_values"
 
-    def test_ent_coef_range(self):
-        ec = self.config["parameters"]["ent_coef"]
+    def test_entropy_coeff_range(self):
+        ec = self.config["sweep"]["parameters"]["entropy_coeff"]
         assert float(ec["min"]) >= 1e-4
         assert float(ec["max"]) <= 0.1
-        assert ec["distribution"] == "log_uniform_values"
 
-    def test_batch_size_values(self):
-        bs = self.config["parameters"]["batch_size"]
+    def test_minibatch_size_values(self):
+        bs = self.config["sweep"]["parameters"]["minibatch_size"]
         assert "values" in bs
         for v in bs["values"]:
             # Must be powers of 2
             assert v > 0 and (v & (v - 1)) == 0, f"{v} is not a power of 2"
 
     def test_gamma_range(self):
-        g = self.config["parameters"]["gamma"]
+        g = self.config["sweep"]["parameters"]["gamma"]
         assert g["min"] >= 0.9
         assert g["max"] <= 1.0
 
-    def test_early_termination_configured(self):
-        et = self.config["early_terminate"]
-        assert et["type"] == "hyperband"
-        assert et["min_iter"] > 0
+    def test_num_samples_is_reasonable(self):
+        assert 10 <= self.config["sweep"]["num_samples"] <= 100
 
-    def test_run_cap_is_reasonable(self):
-        assert 10 <= self.config["run_cap"] <= 100
-
-    def test_program_points_to_sweep_agent(self):
-        assert "sweep_agent" in self.config["program"]
+    def test_grace_period_configured(self):
+        assert self.config["sweep"]["grace_period"] > 0
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -89,40 +82,40 @@ class TestSweepConfig:
 
 class TestSharpeComputation:
     def test_positive_returns_positive_sharpe(self):
-        from training.callbacks.sweep_eval_callback import compute_sharpe
+        from training.callbacks.trading_callbacks import compute_sharpe
 
         returns = [0.05, 0.03, 0.04, 0.06, 0.02]
         sharpe = compute_sharpe(returns)
         assert sharpe > 0
 
     def test_negative_returns_negative_sharpe(self):
-        from training.callbacks.sweep_eval_callback import compute_sharpe
+        from training.callbacks.trading_callbacks import compute_sharpe
 
         returns = [-0.05, -0.03, -0.04, -0.06, -0.02]
         sharpe = compute_sharpe(returns)
         assert sharpe < 0
 
     def test_zero_variance_returns_zero(self):
-        from training.callbacks.sweep_eval_callback import compute_sharpe
+        from training.callbacks.trading_callbacks import compute_sharpe
 
         returns = [0.05, 0.05, 0.05, 0.05]
         sharpe = compute_sharpe(returns)
         assert sharpe == 0.0
 
     def test_single_episode_returns_zero(self):
-        from training.callbacks.sweep_eval_callback import compute_sharpe
+        from training.callbacks.trading_callbacks import compute_sharpe
 
         sharpe = compute_sharpe([0.05])
         assert sharpe == 0.0
 
     def test_empty_returns_zero(self):
-        from training.callbacks.sweep_eval_callback import compute_sharpe
+        from training.callbacks.trading_callbacks import compute_sharpe
 
         sharpe = compute_sharpe([])
         assert sharpe == 0.0
 
     def test_annualization_factor(self):
-        from training.callbacks.sweep_eval_callback import compute_sharpe
+        from training.callbacks.trading_callbacks import compute_sharpe
 
         returns = [0.1, 0.2, 0.1, 0.2, 0.1]
         sharpe_annual = compute_sharpe(returns, annualize_factor=3.49)
@@ -131,44 +124,36 @@ class TestSharpeComputation:
 
 
 # ──────────────────────────────────────────────────────────────────────
-# Test: SweepEvalCallback
+# Test: TradingCallbacks
 # ──────────────────────────────────────────────────────────────────────
 
-class TestSweepEvalCallback:
+class TestTradingCallbacks:
     def test_callback_import(self):
-        """SweepEvalCallback imports without error."""
-        from training.callbacks.sweep_eval_callback import SweepEvalCallback
-        assert SweepEvalCallback is not None
+        """TradingCallbacks imports without error."""
+        from training.callbacks.trading_callbacks import TradingCallbacks
+        assert TradingCallbacks is not None
 
-    def test_callback_init(self):
-        """SweepEvalCallback can be instantiated with a mock env."""
-        from unittest.mock import MagicMock
-        from training.callbacks.sweep_eval_callback import SweepEvalCallback
+    def test_callback_is_default_callbacks_subclass(self):
+        """TradingCallbacks extends RLlib DefaultCallbacks."""
+        from ray.rllib.algorithms.callbacks import DefaultCallbacks
+        from training.callbacks.trading_callbacks import TradingCallbacks
 
-        mock_env = MagicMock()
-        cb = SweepEvalCallback(
-            eval_env=mock_env,
-            eval_freq=1000,
-            n_eval_episodes=5,
-        )
-        assert cb.eval_freq == 1000
-        assert cb.n_eval_episodes == 5
+        assert issubclass(TradingCallbacks, DefaultCallbacks)
 
 
 # ──────────────────────────────────────────────────────────────────────
-# Test: Sweep Agent Imports
+# Test: Tune Sweep Module Imports
 # ──────────────────────────────────────────────────────────────────────
 
-class TestSweepAgentImports:
-    def test_sweep_agent_imports(self):
-        """sweep_agent.py imports without error."""
-        from training.sweep_agent import SHIELD_ENV_KWARGS, FIXED_PPO, load_episode_data
+class TestTuneSweepImports:
+    def test_tune_sweep_imports(self):
+        """tune_sweep.py imports without error."""
+        from training.tune_sweep import SHIELD_ENV_KWARGS, load_episode_data
         assert SHIELD_ENV_KWARGS["max_leverage"] == 1
-        assert "n_steps" in FIXED_PPO
 
     def test_shield_env_kwargs_match_config(self):
-        """Sweep agent's Shield params match shield_config.yaml."""
-        from training.sweep_agent import SHIELD_ENV_KWARGS
+        """Tune sweep's Shield params match shield_config.yaml."""
+        from training.tune_sweep import SHIELD_ENV_KWARGS
 
         assert SHIELD_ENV_KWARGS["max_leverage"] == 1
         assert SHIELD_ENV_KWARGS["max_positions"] == 2
@@ -285,7 +270,7 @@ class TestShieldVolatilityFix:
         env._calculate_reward(ctx1)
         assert env._last_close_step == 50
 
-        # Next step: should get bonus (steps_since_close = 1, decay ≈ 0.98)
+        # Next step: should get bonus (steps_since_close = 1, decay ~ 0.98)
         ctx2 = {"pnl_pct": 0.0, "drawdown": 0.04, "has_position": False,
                 "step": 51, "funding_cost": 0.0, "current_price": 100.0}
         reward = env._calculate_reward(ctx2)

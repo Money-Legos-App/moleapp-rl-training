@@ -108,8 +108,8 @@ def build_observation(features: MarketFeatures) -> np.ndarray:
     """
     Build the 47-dimensional observation vector from raw market features.
 
-    All outputs are raw (un-normalized). VecNormalize handles scaling during
-    training; production inference applies saved VecNormalize stats.
+    All outputs are raw (un-normalized). MeanStdFilter handles scaling during
+    training; production inference applies saved normalization stats.
 
     Returns:
         np.ndarray of shape (47,) with dtype float32

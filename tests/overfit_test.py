@@ -1,6 +1,6 @@
 """
-Day 1 Overfit Test — Prove the RL pipeline works before RunPod
-================================================================
+Day 1 Overfit Test — Prove the RL pipeline works before RunPod (RLlib)
+=======================================================================
 Goal: NOT to find profitable alpha. Goal is to prove the observation space,
 action mapping, reward function, and episode builder are bug-free.
 
@@ -46,9 +46,9 @@ np.random.seed(SEED)
 torch.manual_seed(SEED)
 
 import gymnasium as gym
-from gymnasium import spaces
-from stable_baselines3 import PPO
-from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
+import ray
+from ray.rllib.algorithms.ppo import PPOConfig
+from ray.tune.registry import register_env
 
 from data.preprocessors.feature_engineer import OBS_DIM, MarketFeatures, build_observation
 from envs.base_trading_env import BaseTradingEnv, Position, EpisodeState
@@ -111,8 +111,12 @@ class OverfitTradingEnv(BaseTradingEnv):
         sl_pct = self.min_sl_pct
         tp_pct = self.min_tp_pct
 
+        # Map action[4] to confidence scaling [0.05, 1.0]
+        confidence = (float(action[4]) + 1.0) / 2.0
+        confidence = np.clip(confidence, 0.05, 1.0)
+
         available_margin = self.state.account_value * (1.0 - self._margin_utilization())
-        position_usd = available_margin * size_frac * leverage
+        position_usd = available_margin * size_frac * leverage * confidence
 
         if position_usd < 1.0:  # Relaxed minimum for testing
             return 0.0
@@ -158,7 +162,7 @@ class OverfitTradingEnv(BaseTradingEnv):
         pass
 
     def _check_sl_tp_liquidation(self, idx):
-        """Override: close position after N steps instead of SL/TP (let agent ride)."""
+        """Override: close position after N steps instead of SL/TP."""
         if self.state.position is None:
             return 0.0
 
@@ -182,6 +186,10 @@ class OverfitTradingEnv(BaseTradingEnv):
     def _calculate_reward(self, ctx):
         """Simple: raw PnL percentage, no bells and whistles."""
         return ctx["pnl_pct"] * 10.0  # Scale up for clearer gradient signal
+
+
+# Register for RLlib
+register_env("OverfitTradingEnv", lambda cfg: OverfitTradingEnv(**cfg))
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -301,13 +309,13 @@ def run_overfit_test(
     verbose: bool = True,
 ) -> dict:
     """
-    Run PPO on a tiny, deterministic environment.
+    Run PPO on a tiny, deterministic environment using RLlib.
 
     Returns dict with results and pass/fail status.
     """
     if verbose:
         print("=" * 70)
-        print("DAY 1 OVERFIT TEST — Proving the RL pipeline works")
+        print("DAY 1 OVERFIT TEST — Proving the RL pipeline works (RLlib)")
         print("=" * 70)
         print()
 
@@ -320,70 +328,89 @@ def run_overfit_test(
     print(f"  Pattern: 3 days bullish (+0.3%/hr), 2 days bearish (-0.4%/hr), repeat")
     print()
 
-    # 2. Create environment
-    print("[2/4] Creating zero-friction overfit environment...")
-    def make_env():
-        return OverfitTradingEnv(
-            market_data=market_data,
-            feature_data=features,
-            episode_length=700,  # Almost full 30 days
-            initial_capital=1000.0,
-        )
+    # 2. Configure RLlib PPO
+    print("[2/4] Creating zero-friction overfit environment with RLlib PPO...")
 
-    vec_env = DummyVecEnv([make_env])
-    vec_env = VecNormalize(vec_env, norm_obs=True, norm_reward=True, clip_obs=10.0)
+    env_config = {
+        "market_data": market_data,
+        "feature_data": features,
+        "episode_length": 700,  # Almost full 30 days
+        "initial_capital": 1000.0,
+    }
+
+    ray.init(ignore_reinit_error=True, num_cpus=2)
+
+    config = (
+        PPOConfig()
+        .environment(
+            env="OverfitTradingEnv",
+            env_config=env_config,
+        )
+        .env_runners(
+            num_env_runners=0,  # Local worker only for determinism
+            observation_filter="MeanStdFilter",
+        )
+        .training(
+            lr=1e-3,               # High — aggressive learning
+            entropy_coeff=0.0,     # Zero entropy — no exploration, pure exploitation
+            num_epochs=20,         # Train many times on same batch
+            train_batch_size_per_learner=700,  # Collect one full episode per update
+            minibatch_size=64,
+            gamma=0.99,
+            lambda_=0.95,
+            clip_param=0.2,
+            grad_clip=0.5,
+            model={
+                "fcnet_hiddens": [128, 128],  # Small net — easier to overfit
+                "fcnet_activation": "tanh",
+            },
+        )
+    )
+
     print(f"  Episode length: 700 steps (29 days)")
     print(f"  Fees: 0, Funding: 0, Slippage: 0")
     print(f"  Position auto-closes after 20 steps (forces re-evaluation)")
     print()
 
-    # 3. Train PPO with memorization hyperparams
-    print(f"[3/4] Training PPO for {total_timesteps:,} timesteps (memorization mode)...")
-    print(f"  LR=1e-3, ent_coef=0.0, n_epochs=20, batch_size=64")
+    # 3. Train
+    n_iterations = max(1, total_timesteps // 700)  # ~iterations to reach total_timesteps
+    print(f"[3/4] Training PPO for ~{total_timesteps:,} timesteps ({n_iterations} iterations)...")
+    print(f"  LR=1e-3, ent_coef=0.0, num_epochs=20, minibatch=64")
     print()
 
-    model = PPO(
-        "MlpPolicy",
-        vec_env,
-        learning_rate=1e-3,         # High — aggressive learning
-        ent_coef=0.0,               # Zero entropy — no exploration, pure exploitation
-        n_epochs=20,                # Train many times on same batch
-        n_steps=700,                # Collect one full episode per update
-        batch_size=64,
-        gamma=0.99,
-        gae_lambda=0.95,
-        clip_range=0.2,
-        max_grad_norm=0.5,
-        policy_kwargs={
-            "net_arch": [128, 128],  # Small net — easier to overfit
-            "activation_fn": torch.nn.Tanh,
-        },
-        verbose=1 if verbose else 0,
-        seed=SEED,
-    )
-
+    algo = config.build()
     start_time = time.time()
-    model.learn(total_timesteps=total_timesteps)
+
+    for i in range(n_iterations):
+        result = algo.train()
+        if verbose and (i + 1) % 20 == 0:
+            reward = result.get("env_runners", {}).get("episode_reward_mean", 0)
+            steps = result.get("timesteps_total", result.get("num_env_steps_sampled_lifetime", 0))
+            print(f"  Iter {i + 1}/{n_iterations}: steps={steps}, reward={reward:.2f}")
+
     train_time = time.time() - start_time
     print(f"\n  Training completed in {train_time:.1f}s")
     print()
 
     # 4. Evaluate: run the trained agent through the same data
     print("[4/4] Evaluating trained agent on the same 30-day data...")
-    eval_env = make_env()
+    eval_env = OverfitTradingEnv(**env_config)
     obs, info = eval_env.reset(seed=SEED)
 
-    # We need to normalize obs the same way as during training
-    # Use the vec_env's normalization
+    # Use RLModule directly for inference (new API stack compatible)
+    import torch
+    rl_module = algo.get_module()
+
     total_reward = 0.0
     trade_log = []
     step = 0
 
     while True:
-        # Normalize observation using VecNormalize stats
-        obs_normalized = vec_env.normalize_obs(obs.reshape(1, -1))
-        action, _ = model.predict(obs_normalized, deterministic=True)
-        action = action.flatten()
+        obs_tensor = torch.as_tensor(obs, dtype=torch.float32).unsqueeze(0)
+        fwd_out = rl_module.forward_inference({"obs": obs_tensor})
+        action_dist_inputs = fwd_out["action_dist_inputs"]
+        # Deterministic: take action means only (first 5 of 10 action_dist_inputs)
+        action = action_dist_inputs.squeeze(0).detach().numpy()[:5]
 
         prev_position = eval_env.state.position
         obs, reward, terminated, truncated, info = eval_env.step(action)
@@ -402,6 +429,10 @@ def run_overfit_test(
 
         if terminated or truncated:
             break
+
+    # Cleanup
+    algo.stop()
+    ray.shutdown()
 
     # Results
     final_value = eval_env.state.account_value

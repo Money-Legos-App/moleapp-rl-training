@@ -146,7 +146,7 @@ def derive_oi_from_candles_and_funding(
     - Clearly tagged as source="derived" (not live)
 
     This is used for training when we don't have real historical OI snapshots.
-    The model learns relative OI patterns, not absolute values (VecNormalize
+    The model learns relative OI patterns, not absolute values (MeanStdFilter
     handles the scaling anyway).
 
     Args:

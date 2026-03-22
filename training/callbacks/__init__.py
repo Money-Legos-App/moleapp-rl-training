@@ -1,3 +1,3 @@
-from training.callbacks.sweep_eval_callback import SweepEvalCallback
+from training.callbacks.trading_callbacks import TradingCallbacks
 
-__all__ = ["SweepEvalCallback"]
+__all__ = ["TradingCallbacks"]

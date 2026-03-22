@@ -1,30 +1,38 @@
-# Shield (CONSERVATIVE) PPO Training Configuration
+# Shield (CONSERVATIVE) PPO Training Configuration — RLlib
 # Target: Sharpe > 1.0, Max Drawdown < 10%, Win Rate > 60%
 
-model: PPO
+algorithm: PPO
 env: ShieldTradingEnv
 
-# PPO Hyperparameters
+# Training loop
 total_timesteps: 10_000_000     # ~40h on A100, ~120h on T4
-n_steps: 2048                    # Steps before each PPO update
-batch_size: 64                   # Mini-batch size for each gradient step
-n_epochs: 10                     # Passes over collected batch
-learning_rate: 0.0003
+
+# PPO Hyperparameters
+lr: 0.0003
 gamma: 0.99                      # High discount — Shield cares about long-term stability
-gae_lambda: 0.95                 # GAE for advantage estimation
-clip_range: 0.2                  # PPO clipping parameter
-ent_coef: 0.01                   # Entropy bonus for exploration
-vf_coef: 0.5                     # Value function coefficient
-max_grad_norm: 0.5               # Gradient clipping
+lambda_: 0.95                    # GAE for advantage estimation
+clip_param: 0.2                  # PPO clipping parameter
+num_epochs: 10                   # Passes over collected batch
+minibatch_size: 64               # Mini-batch size for each gradient step
+train_batch_size_per_learner: 2048  # Steps before each PPO update
+entropy_coeff: 0.01              # Entropy bonus for exploration
+vf_loss_coeff: 0.5               # Value function coefficient
+grad_clip: 0.5                   # Gradient clipping
 
 # Policy Network
-policy: MlpPolicy
-policy_kwargs:
-  net_arch: [256, 256, 128]      # 3-layer MLP
-  activation_fn: tanh
+model:
+  fcnet_hiddens: [256, 256, 128]   # 3-layer MLP
+  fcnet_activation: tanh
 
-# Environment Parameters (override defaults)
-env_kwargs:
+# Parallelism
+num_env_runners: 4
+num_envs_per_env_runner: 1
+
+# Observation normalization (replaces VecNormalize)
+observation_filter: MeanStdFilter
+
+# Environment Parameters
+env_config:
   max_leverage: 1
   max_positions: 2
   initial_capital: 1000.0
@@ -33,23 +41,24 @@ env_kwargs:
   max_tp_pct: 0.06
   min_tp_pct: 0.01
   episode_length: 2880           # 30 days of 15-min steps
-
-# VecNormalize
-normalize_observations: true
-normalize_rewards: true
-norm_obs_clip: 10.0
-norm_reward_clip: 10.0
+  max_drawdown_pct: 0.10         # 10% kill switch — terminates episode
 
 # Evaluation
-eval_freq: 50000                 # Evaluate every 50k steps
-n_eval_episodes: 20
-deterministic_eval: true
+evaluation:
+  evaluation_interval: 25        # Every 25 training iterations
+  evaluation_duration: 20        # Number of eval episodes
+  num_env_runners: 1
 
-# Checkpointing
-checkpoint_freq: 200000          # Save every 200k steps
-save_best_model: true
+# Checkpointing (iterations, not timesteps)
+checkpoint_freq: 10
+
+# GPU (set > 0 for RunPod)
+num_gpus: 0
+num_learners: 1
+num_gpus_per_learner: 1
 
 # W&B Logging
-wandb_project: moleapp-rl
-wandb_run_name: shield-v1
-wandb_tags: ["shield", "conservative", "ppo"]
+wandb:
+  project: moleapp-rl
+  run_name: shield-v2-rllib
+  tags: ["shield", "conservative", "ppo", "rllib"]

@@ -8,7 +8,8 @@ version = "0.1.0"
 description = "Reinforcement Learning training pipeline for MoleApp Alpha trading agents"
 requires-python = ">=3.11"
 dependencies = [
-    "stable-baselines3>=2.3.0",
+    "ray[rllib]>=2.40.0",
+    "ray[tune]>=2.40.0",
     "gymnasium>=0.29.0",
     "torch>=2.1.0",
     "onnx>=1.15.0",

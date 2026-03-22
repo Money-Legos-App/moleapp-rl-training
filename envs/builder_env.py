@@ -25,6 +25,7 @@ class BuilderTradingEnv(BaseTradingEnv):
         kwargs.setdefault("min_sl_pct", 0.01)
         kwargs.setdefault("max_tp_pct", 0.10)
         kwargs.setdefault("min_tp_pct", 0.02)
+        kwargs.setdefault("max_drawdown_pct", 0.20)  # 20% kill — matches risk_manager.py
         kwargs.setdefault("profile_name", "builder")
         super().__init__(**kwargs)
 
@@ -49,10 +50,8 @@ class BuilderTradingEnv(BaseTradingEnv):
             reward += pnl * 0.2  # 20% bonus for sustained gains
         self._prev_pnl = pnl
 
-        # --- Drawdown penalty (moderate, kicks in above 15%) ---
-        if drawdown > 0.20:
-            reward -= 1.5  # Hard penalty above 20%
-        elif drawdown > 0.15:
+        # --- Drawdown penalty (escalating — episode terminates at 20% via base env) ---
+        if drawdown > 0.15:
             reward -= (drawdown - 0.15) * 10.0  # Steep ramp from 15-20%
         elif drawdown > 0.10:
             reward -= (drawdown - 0.10) * 2.0  # Gentle ramp from 10-15%

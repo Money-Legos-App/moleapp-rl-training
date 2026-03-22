@@ -26,6 +26,7 @@ class HunterTradingEnv(BaseTradingEnv):
         kwargs.setdefault("min_sl_pct", 0.02)
         kwargs.setdefault("max_tp_pct", 0.15)
         kwargs.setdefault("min_tp_pct", 0.03)
+        kwargs.setdefault("max_drawdown_pct", 0.30)  # 30% kill — matches risk_manager.py
         kwargs.setdefault("profile_name", "hunter")
         super().__init__(**kwargs)
 
@@ -44,11 +45,9 @@ class HunterTradingEnv(BaseTradingEnv):
         elif pnl > 0.03:
             reward += pnl * 0.2  # 20% bonus for >3% gains
 
-        # --- Soft drawdown penalty only past 25% ---
-        if drawdown > 0.35:
-            reward -= 1.0  # Hard penalty at 35%
-        elif drawdown > 0.25:
-            reward -= (drawdown - 0.25) * 3.0  # Moderate ramp from 25-35%
+        # --- Soft drawdown penalty (escalating — episode terminates at 30% via base env) ---
+        if drawdown > 0.25:
+            reward -= (drawdown - 0.25) * 3.0  # Moderate ramp from 25-30%
 
         # --- No funding penalty (Hunter rides positions through funding) ---
         # --- No time penalty (Hunter waits for the right moment) ---

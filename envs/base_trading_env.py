@@ -33,6 +33,13 @@ FUNDING_INTERVAL_HOURS = 8
 MIN_NOTIONAL_USD = 10.0
 LIQUIDATION_MAINTENANCE_MARGIN = 0.03  # 3% maintenance margin
 
+# Market impact model: slippage_pct = IMPACT_COEFF * sqrt(position_usd / bar_volume_usd)
+# Square-root impact is standard in TCA literature (Kyle, 1985).
+# 0.1 coefficient means: trading 1% of bar volume → ~0.1% * sqrt(0.01) = 0.01% slippage.
+# Trading 100% of bar volume → 0.1% * sqrt(1.0) = 0.1% slippage.
+# Conservative but realistic for HL perpetuals.
+IMPACT_COEFF = 0.001  # 0.1% at full-bar volume
+
 
 @dataclass
 class Position:
@@ -74,7 +81,7 @@ class BaseTradingEnv(gym.Env):
       [1] leverage: mapped to [1, max_leverage]
       [2] stop_loss_pct: mapped to [min_sl, max_sl]
       [3] take_profit_pct: mapped to [min_tp, max_tp]
-      [4] confidence/urgency: ranking signal (not used in env logic)
+      [4] confidence: scales position size ([-1,1] → [5%, 100%] of intended size)
     """
 
     metadata = {"render_modes": ["human"]}
@@ -91,6 +98,7 @@ class BaseTradingEnv(gym.Env):
         max_tp_pct: float = 0.15,
         min_tp_pct: float = 0.02,
         episode_length: int = 2880,  # 30 days of 15-min steps
+        max_drawdown_pct: float = 1.0,  # Drawdown kill: 0.10=10%. 1.0=disabled (base default)
         profile_name: str = "base",
     ):
         super().__init__()
@@ -105,6 +113,7 @@ class BaseTradingEnv(gym.Env):
         self.max_tp_pct = max_tp_pct
         self.min_tp_pct = min_tp_pct
         self.episode_length = min(episode_length, len(market_data))
+        self.max_drawdown_pct = max_drawdown_pct
         self.profile_name = profile_name
 
         # Spaces
@@ -188,6 +197,12 @@ class BaseTradingEnv(gym.Env):
             terminated = True
             reward -= 10.0  # Universal heavy penalty for blowup
 
+        # Drawdown kill — matches production risk_manager.py kill switch
+        # Shield=10%, Builder=20%, Hunter=30%. Episode ENDS, not just penalty.
+        if drawdown >= self.max_drawdown_pct:
+            terminated = True
+            reward -= 5.0  # Heavy but less than blowup (agent should learn to avoid)
+
         # Episode time limit
         if self.state.step >= self.episode_length - 1:
             truncated = True
@@ -256,6 +271,29 @@ class BaseTradingEnv(gym.Env):
             return float(self.market_data[idx, 5])
         return 0.0
 
+    def _get_volume(self, idx: int) -> float:
+        """Get bar volume at index. Assumes column 4 = volume in market_data."""
+        idx = min(idx, len(self.market_data) - 1)
+        return max(float(self.market_data[idx, 4]), 1.0)  # Floor at 1 to avoid div-by-zero
+
+    def _estimate_slippage(self, position_usd: float, price: float, idx: int) -> float:
+        """
+        Estimate market impact slippage using square-root model.
+
+        Returns slippage as a fraction (e.g., 0.001 = 0.1%).
+        The entry price is adjusted adversely by this amount.
+
+        Model: slippage = IMPACT_COEFF * sqrt(position_usd / bar_volume_usd)
+        - Small orders (<<bar volume): negligible slippage
+        - Large orders (~bar volume): ~0.1% slippage
+        - Huge orders (>bar volume): >0.1% slippage (agent learns to avoid)
+        """
+        bar_volume_usd = self._get_volume(idx) * price
+        if bar_volume_usd <= 0:
+            return 0.0
+        participation_rate = position_usd / bar_volume_usd
+        return IMPACT_COEFF * np.sqrt(participation_rate)
+
     def _process_action(self, action: np.ndarray, idx: int) -> float:
         """Parse Box(5) action and open a position if signaled."""
         direction_size = float(action[0])
@@ -282,9 +320,13 @@ class BaseTradingEnv(gym.Env):
             self.max_tp_pct - self.min_tp_pct
         )
 
-        # Calculate position size in USD
+        # Map action[4] to confidence scaling [0.05, 1.0]
+        confidence = (float(action[4]) + 1.0) / 2.0  # [-1,1] → [0,1]
+        confidence = np.clip(confidence, 0.05, 1.0)   # Floor 5% — prevents zero-position exploit
+
+        # Calculate position size in USD (scaled by confidence)
         available_margin = self.state.account_value * (1.0 - self._margin_utilization())
-        position_usd = available_margin * size_frac * leverage
+        position_usd = available_margin * size_frac * leverage * confidence
 
         # Minimum notional check
         if position_usd < MIN_NOTIONAL_USD:
@@ -295,10 +337,18 @@ class BaseTradingEnv(gym.Env):
         self.state.account_value -= fee
         self.state.total_fees_paid += fee
 
+        # Market impact slippage: worse fill price for larger orders
         price = self._get_price(idx)
+        slippage_pct = self._estimate_slippage(position_usd, price, idx)
+        # Adverse fill: longs pay more, shorts receive less
+        fill_price = price * (1.0 + direction * slippage_pct)
+        slippage_cost = position_usd * slippage_pct
+        self.state.account_value -= slippage_cost
+        self.state.total_fees_paid += slippage_cost  # Track with fees
+
         self.state.position = Position(
             direction=direction,
-            entry_price=price,
+            entry_price=fill_price,
             size_usd=position_usd,
             leverage=leverage,
             stop_loss_pct=sl_pct,
@@ -308,7 +358,7 @@ class BaseTradingEnv(gym.Env):
         self.state.total_trades += 1
         self.state.last_trade_step = self.state.step
 
-        return -fee / max(self.state.account_value, 1.0)  # fee as negative PnL
+        return -(fee + slippage_cost) / max(self.state.account_value, 1.0)
 
     def _check_sl_tp_liquidation(self, idx: int) -> float:
         """Check stop loss, take profit, and liquidation for open position."""
@@ -346,7 +396,7 @@ class BaseTradingEnv(gym.Env):
         return 0.0
 
     def _close_position(self, pnl_pct: float, reason: str) -> float:
-        """Close position, apply fees, update account."""
+        """Close position, apply fees + exit slippage, update account."""
         if self.state.position is None:
             return 0.0
 
@@ -355,9 +405,17 @@ class BaseTradingEnv(gym.Env):
 
         # Exit fee
         fee = pos.size_usd * TAKER_FEE_PCT
-        self.state.account_value += realized_pnl - fee
-        self.state.total_fees_paid += fee
-        self.state.total_pnl += realized_pnl - fee
+
+        # Exit slippage (closing = reverse direction, same impact model)
+        current_idx = self._episode_start_idx + self.state.step
+        price = self._get_price(current_idx)
+        exit_slippage = self._estimate_slippage(pos.size_usd, price, current_idx)
+        slippage_cost = pos.size_usd * exit_slippage
+
+        total_cost = fee + slippage_cost
+        self.state.account_value += realized_pnl - total_cost
+        self.state.total_fees_paid += total_cost
+        self.state.total_pnl += realized_pnl - total_cost
 
         if realized_pnl > 0:
             self.state.winning_trades += 1
@@ -368,7 +426,7 @@ class BaseTradingEnv(gym.Env):
         )
 
         self.state.position = None
-        return (realized_pnl - fee) / max(self.state.account_value, 1.0)
+        return (realized_pnl - total_cost) / max(self.state.account_value, 1.0)
 
     def _process_funding(self, idx: int) -> None:
         """Apply funding rate every 8 hours (32 steps at 15-min interval)."""
