@@ -33,7 +33,7 @@ env_config:
   min_sl_pct: 0.02
   max_tp_pct: 0.15
   min_tp_pct: 0.03
-  episode_length: 2880
+  episode_length: 2880           # 120 days of 1h candles (~4 months)
   max_drawdown_pct: 0.30         # 30% kill switch — terminates episode
 
 evaluation:
@@ -43,7 +43,7 @@ evaluation:
 
 checkpoint_freq: 10
 
-num_gpus: 0
+num_gpus: auto
 num_learners: 1
 num_gpus_per_learner: 1
 

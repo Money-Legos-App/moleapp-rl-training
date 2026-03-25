@@ -16,6 +16,7 @@ from pathlib import Path
 
 import numpy as np
 import ray
+import torch
 import yaml
 from ray.rllib.algorithms.ppo import PPOConfig
 from ray.rllib.algorithms.algorithm import Algorithm
@@ -25,41 +26,75 @@ from envs import ENV_MAP
 logger = logging.getLogger(__name__)
 
 
+def _resolve_num_gpus(config_val) -> int:
+    """Resolve num_gpus from config — supports 'auto', int, or 0."""
+    if config_val == "auto":
+        n = torch.cuda.device_count()
+        logger.info(f"GPU auto-detect: {n} GPU(s) found")
+        return min(n, 1)  # Use 1 GPU for single-learner PPO
+    return int(config_val)
+
+
 def load_config(config_path: str) -> dict:
     """Load training configuration from YAML file."""
     with open(config_path, "r") as f:
         return yaml.safe_load(f)
 
 
-def _load_training_data(data_dir: str, episode_dir: str = "data/episodes"):
+def _load_training_data(
+    data_dir: str,
+    episode_dir: str = "data/episodes",
+    assets: list[str] | None = None,
+):
     """
     Load market data and features for training.
 
+    When multiple assets are specified, their episodes are concatenated
+    sequentially. Each asset's data is independent (the env resets between
+    asset boundaries via episode_length).
+
+    Args:
+        data_dir: Directory with .parquet files
+        episode_dir: Directory with cached .npy/.pkl episodes
+        assets: List of asset names to load (default: all 15 MoleApp assets)
+
     Returns:
-        market_data: np.ndarray of shape (timesteps, 7) — OHLCV + funding + OI
-        feature_data: list of MarketFeatures (one per timestep)
+        market_data: np.ndarray of shape (total_timesteps, 7)
+        feature_data: list of MarketFeatures
     """
-    ep_path = Path(episode_dir) / "BTC"
-    market_path = ep_path / "market_data.npy"
-    features_path = ep_path / "features.pkl"
+    if assets is None:
+        from data.collectors.asset_config import ALLOWED_ASSETS
+        assets = ALLOWED_ASSETS  # All 15 supported assets
 
-    if market_path.exists() and features_path.exists():
-        market_data = np.load(market_path)
-        with open(features_path, "rb") as f:
-            feature_data = pickle.load(f)
-        logger.info(
-            f"Loaded cached episodes for BTC: {len(feature_data)} timesteps, "
-            f"market_data shape={market_data.shape}"
-        )
-        return market_data, feature_data
+    all_market = []
+    all_features = []
 
-    logger.info("No cached episodes found, building from parquets...")
-    from data.preprocessors.episode_builder import EpisodeBuilder
+    for asset in assets:
+        ep_path = Path(episode_dir) / asset
+        market_path = ep_path / "market_data.npy"
+        features_path = ep_path / "features.pkl"
 
-    builder = EpisodeBuilder(data_dir=data_dir)
-    market_data, feature_data = builder.build_episodes("BTC")
-    logger.info(f"Built {len(feature_data)} timesteps from {data_dir}")
-    return market_data, feature_data
+        if market_path.exists() and features_path.exists():
+            m = np.load(market_path)
+            with open(features_path, "rb") as f:
+                feat = pickle.load(f)
+            logger.info(f"Loaded {asset}: {len(feat)} timesteps, shape={m.shape}")
+        else:
+            logger.info(f"No cached episodes for {asset}, building from parquets...")
+            from data.preprocessors.episode_builder import EpisodeBuilder
+            builder = EpisodeBuilder(data_dir=data_dir)
+            m, feat = builder.build_episodes(asset)
+            logger.info(f"Built {asset}: {len(feat)} timesteps")
+
+        all_market.append(m)
+        all_features.extend(feat)
+
+    market_data = np.concatenate(all_market, axis=0)
+    logger.info(
+        f"Total training data: {len(assets)} asset(s), "
+        f"{len(all_features)} timesteps, shape={market_data.shape}"
+    )
+    return market_data, all_features
 
 
 def build_ppo_config(profile: str, config: dict, env_config: dict) -> PPOConfig:
@@ -104,8 +139,8 @@ def build_ppo_config(profile: str, config: dict, env_config: dict) -> PPOConfig:
         )
     )
 
-    # Multi-GPU support
-    num_gpus = config.get("num_gpus", 0)
+    # GPU support (auto-detect or explicit)
+    num_gpus = _resolve_num_gpus(config.get("num_gpus", 0))
     if num_gpus > 0:
         ppo_config.learners(
             num_learners=config.get("num_learners", 1),
@@ -128,6 +163,7 @@ def train(
     episode_dir: str = "data/episodes",
     output_dir: str = "models",
     resume_from: str | None = None,
+    assets: list[str] | None = None,
 ):
     """
     Train a PPO model for the specified risk profile using RLlib.
@@ -139,6 +175,7 @@ def train(
         episode_dir: Directory with cached EpisodeBuilder output
         output_dir: Directory for model artifacts
         resume_from: Path to checkpoint to resume from (optional)
+        assets: Assets to train on (default: all 15 supported assets)
     """
     config = load_config(config_path)
     output_path = Path(output_dir) / profile
@@ -147,7 +184,7 @@ def train(
     logger.info(f"Training {profile} model with config: {config_path}")
 
     # Load market data
-    market_data, feature_data = _load_training_data(data_dir, episode_dir)
+    market_data, feature_data = _load_training_data(data_dir, episode_dir, assets=assets)
     logger.info(f"Loaded {len(market_data)} timesteps of market data")
 
     # Split train/eval (80/20)
@@ -338,6 +375,12 @@ def main():
         default=None,
         help="Path to checkpoint to resume training from",
     )
+    parser.add_argument(
+        "--assets",
+        nargs="*",
+        default=None,
+        help="Assets to train on (default: all 15). Use --assets BTC ETH to limit.",
+    )
 
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
@@ -349,6 +392,7 @@ def main():
         episode_dir=args.episode_dir,
         output_dir=args.output_dir,
         resume_from=args.resume,
+        assets=args.assets,
     )
 
 

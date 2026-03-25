@@ -40,7 +40,7 @@ env_config:
   min_sl_pct: 0.005
   max_tp_pct: 0.06
   min_tp_pct: 0.01
-  episode_length: 2880           # 30 days of 15-min steps
+  episode_length: 2880           # 120 days of 1h candles (~4 months)
   max_drawdown_pct: 0.10         # 10% kill switch — terminates episode
 
 # Evaluation
@@ -52,8 +52,9 @@ evaluation:
 # Checkpointing (iterations, not timesteps)
 checkpoint_freq: 10
 
-# GPU (set > 0 for RunPod)
-num_gpus: 0
+# GPU — auto-detected at runtime by train.py
+# Set to 0 for CPU-only, or leave as-is for auto-detect
+num_gpus: auto
 num_learners: 1
 num_gpus_per_learner: 1
 
