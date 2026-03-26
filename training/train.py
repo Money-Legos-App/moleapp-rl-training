@@ -290,7 +290,7 @@ def train(
                     if val is not None:
                         log_data[f"eval/{metric_key}"] = val
 
-            wandb.log(log_data, step=total_steps)
+            wandb.log(log_data, step=int(total_steps))
 
         # Console progress
         if iteration % 5 == 0:
