@@ -41,7 +41,7 @@ evaluation:
   evaluation_duration: 20
   num_env_runners: 1
 
-checkpoint_freq: 10
+checkpoint_freq: 50
 
 num_gpus: auto
 num_learners: 1

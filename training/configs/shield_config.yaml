@@ -50,7 +50,7 @@ evaluation:
   num_env_runners: 1
 
 # Checkpointing (iterations, not timesteps)
-checkpoint_freq: 10
+checkpoint_freq: 50
 
 # GPU — auto-detected at runtime by train.py
 # Set to 0 for CPU-only, or leave as-is for auto-detect
