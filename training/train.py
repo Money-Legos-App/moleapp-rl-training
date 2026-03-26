@@ -1,6 +1,8 @@
 """
 Unified Training Script for Shield, Builder, and Hunter Models (RLlib)
 =======================================================================
+Uses the new API stack (RLModule + Learner + ConnectorV2 + EnvRunner).
+
 Usage:
     python -m training.train --profile shield --config training/configs/shield_config.yaml
     python -m training.train --profile builder --config training/configs/builder_config.yaml
@@ -98,15 +100,11 @@ def _load_training_data(
 
 
 def build_ppo_config(profile: str, config: dict, env_config: dict) -> PPOConfig:
-    """Build an RLlib PPOConfig from YAML config dict."""
+    """Build an RLlib PPOConfig from YAML config dict (new API stack)."""
     env_name = ENV_MAP[profile]
 
     ppo_config = (
         PPOConfig()
-        .api_stack(
-            enable_rl_module_and_learner=False,
-            enable_env_runner_and_connector_v2=False,
-        )
         .environment(
             env=env_name,
             env_config=env_config,
@@ -114,7 +112,6 @@ def build_ppo_config(profile: str, config: dict, env_config: dict) -> PPOConfig:
         .env_runners(
             num_env_runners=config.get("num_env_runners", 4),
             num_envs_per_env_runner=config.get("num_envs_per_env_runner", 1),
-            observation_filter=config.get("observation_filter", "MeanStdFilter"),
         )
         .training(
             lr=config.get("lr", 3e-4),
@@ -127,10 +124,12 @@ def build_ppo_config(profile: str, config: dict, env_config: dict) -> PPOConfig:
             entropy_coeff=config.get("entropy_coeff", 0.01),
             vf_loss_coeff=config.get("vf_loss_coeff", 0.5),
             grad_clip=config.get("grad_clip", 0.5),
-            model=config.get("model", {
-                "fcnet_hiddens": [256, 256, 128],
-                "fcnet_activation": "tanh",
-            }),
+        )
+        .rl_module(
+            model_config={
+                "fcnet_hiddens": config.get("model", {}).get("fcnet_hiddens", [256, 256, 128]),
+                "fcnet_activation": config.get("model", {}).get("fcnet_activation", "tanh"),
+            },
         )
         .evaluation(
             evaluation_interval=config.get("evaluation", {}).get("evaluation_interval", 25),
@@ -143,10 +142,13 @@ def build_ppo_config(profile: str, config: dict, env_config: dict) -> PPOConfig:
         )
     )
 
-    # GPU support (auto-detect or explicit) — old stack uses resources()
+    # GPU support — new stack uses .learners()
     num_gpus = _resolve_num_gpus(config.get("num_gpus", 0))
     if num_gpus > 0:
-        ppo_config.resources(num_gpus=num_gpus)
+        ppo_config.learners(
+            num_learners=config.get("num_learners", 1),
+            num_gpus_per_learner=config.get("num_gpus_per_learner", 1),
+        )
 
     return ppo_config
 
@@ -256,37 +258,38 @@ def train(
     while total_steps < total_timesteps:
         result = algo.train()
         iteration += 1
-        total_steps = result.get("timesteps_total", result.get("num_env_steps_sampled_lifetime", 0))
+        total_steps = result.get("num_env_steps_sampled_lifetime", result.get("timesteps_total", 0))
 
         # Log to W&B
         if wandb_run:
+            env_runners = result.get("env_runners", {})
             log_data = {
                 "train/timesteps": total_steps,
-                "train/episode_reward_mean": result.get("episode_reward_mean", result.get("env_runners", {}).get("episode_reward_mean", 0)),
-                "train/episode_len_mean": result.get("episode_len_mean", result.get("env_runners", {}).get("episode_len_mean", 0)),
+                "train/episode_reward_mean": env_runners.get("episode_reward_mean", 0),
+                "train/episode_len_mean": env_runners.get("episode_len_mean", 0),
             }
 
-            # Learner stats (old stack uses info.learner.default_policy)
-            learner_info = result.get("info", {}).get("learner", {}).get("default_policy", {}).get("learner_stats", {})
+            # Learner stats (new stack: result["learners"]["default_policy"])
+            learner_info = result.get("learners", {}).get("default_policy", {})
             if learner_info:
                 log_data["train/policy_loss"] = learner_info.get("policy_loss", 0)
                 log_data["train/vf_loss"] = learner_info.get("vf_loss", 0)
                 log_data["train/entropy"] = learner_info.get("entropy", 0)
+                log_data["train/total_loss"] = learner_info.get("total_loss", 0)
 
-            # Trading-specific metrics from TradingCallbacks (old stack: custom_metrics)
-            custom_metrics = result.get("custom_metrics", {})
+            # Trading-specific metrics from TradingCallbacks (new stack: env_runners)
             for metric_key in ("total_return", "max_drawdown", "win_rate", "total_trades", "total_pnl"):
-                val = custom_metrics.get(f"{metric_key}_mean", None)
+                val = env_runners.get(metric_key, None)
                 if val is not None:
                     log_data[f"train/{metric_key}"] = val
 
             # Eval metrics
             eval_results = result.get("evaluation", {})
             if eval_results:
-                log_data["eval/episode_reward_mean"] = eval_results.get("episode_reward_mean", 0)
-                eval_custom = eval_results.get("custom_metrics", {})
+                eval_runners = eval_results.get("env_runners", {})
+                log_data["eval/episode_reward_mean"] = eval_runners.get("episode_reward_mean", 0)
                 for metric_key in ("total_return", "max_drawdown", "win_rate", "total_trades", "total_pnl"):
-                    val = eval_custom.get(f"{metric_key}_mean", None)
+                    val = eval_runners.get(metric_key, None)
                     if val is not None:
                         log_data[f"eval/{metric_key}"] = val
 
@@ -294,10 +297,13 @@ def train(
 
         # Console progress
         if iteration % 5 == 0:
-            reward_mean = result.get("env_runners", {}).get("episode_reward_mean", 0)
+            env_runners = result.get("env_runners", {})
+            reward_mean = env_runners.get("episode_reward_mean", 0)
+            win_rate = env_runners.get("win_rate", 0)
+            total_return = env_runners.get("total_return", 0)
             logger.info(
                 f"[Iter {iteration}] steps={total_steps:,} "
-                f"reward={reward_mean:.2f}"
+                f"reward={reward_mean:.2f} win_rate={win_rate:.2f} return={total_return:.3f}"
             )
 
         # Checkpoint
@@ -323,22 +329,51 @@ def train(
 
 
 def _save_norm_stats(algo, output_path: Path, profile: str):
-    """Extract MeanStdFilter stats and save in production-compatible format."""
+    """
+    Extract observation normalization stats and save for production inference.
+
+    New API stack: MeanStdFilter is no longer available as an env_runner option.
+    Instead, we collect running obs stats from the env's observation wrapper
+    or compute them from a sample of observations via the env runner.
+    """
     try:
-        # Old API stack uses workers.local_worker().filters
-        filters = algo.workers.local_worker().filters
-        if "default_policy" in filters:
-            obs_filter = filters["default_policy"]
+        # Try to get stats from env runner's env (if using NormalizeObservation wrapper)
+        env_runner = algo.env_runner
+        env = env_runner.env
+        if hasattr(env, "obs_rms"):
+            # gym.wrappers.NormalizeObservation stores running stats
             norm_stats = {
-                "obs_rms_mean": np.array(obs_filter.rs.mean, dtype=np.float64),
-                "obs_rms_var": np.array(obs_filter.rs.var, dtype=np.float64),
-                "obs_rms_count": float(obs_filter.rs.count),
+                "obs_rms_mean": np.array(env.obs_rms.mean, dtype=np.float64),
+                "obs_rms_var": np.array(env.obs_rms.var, dtype=np.float64),
+                "obs_rms_count": float(env.obs_rms.count),
                 "clip_obs": 10.0,
             }
-            stats_path = output_path / f"{profile}_norm_stats.pkl"
-            with open(stats_path, "wb") as f:
-                pickle.dump(norm_stats, f)
-            logger.info(f"Saved norm stats to {stats_path}")
+        else:
+            # Fallback: sample observations to compute stats
+            logger.info("No obs_rms found, computing norm stats from training data...")
+            sample_obs = []
+            test_env = env_runner.env
+            obs, _ = test_env.reset()
+            sample_obs.append(obs)
+            for _ in range(min(1000, len(test_env.market_data) - 1)):
+                action = test_env.action_space.sample()
+                obs, _, terminated, truncated, _ = test_env.step(action)
+                sample_obs.append(obs)
+                if terminated or truncated:
+                    obs, _ = test_env.reset()
+                    sample_obs.append(obs)
+            obs_arr = np.array(sample_obs)
+            norm_stats = {
+                "obs_rms_mean": obs_arr.mean(axis=0).astype(np.float64),
+                "obs_rms_var": obs_arr.var(axis=0).astype(np.float64),
+                "obs_rms_count": float(len(obs_arr)),
+                "clip_obs": 10.0,
+            }
+
+        stats_path = output_path / f"{profile}_norm_stats.pkl"
+        with open(stats_path, "wb") as f:
+            pickle.dump(norm_stats, f)
+        logger.info(f"Saved norm stats to {stats_path}")
     except Exception as e:
         logger.warning(f"Could not extract norm stats: {e}")
 

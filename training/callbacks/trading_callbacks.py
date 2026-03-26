@@ -1,11 +1,12 @@
 """
-RLlib Trading Callbacks
-========================
+RLlib Trading Callbacks (New API Stack)
+========================================
 Custom RLlib callbacks that extract trading-specific metrics (Sharpe,
-drawdown, win rate) from episode info dicts and log them as custom metrics.
+drawdown, win rate) from episode info dicts and log them via MetricsLogger.
 
-These metrics are automatically included in RLlib's result dict and can
-be logged to W&B via the training loop or Ray Tune's WandbLoggerCallback.
+Uses the new API stack (RLModule + Learner + ConnectorV2 + EnvRunner).
+Metrics are reported under result["env_runners"]["<key>"] and can be
+logged to W&B via the training loop.
 """
 
 from __future__ import annotations
@@ -45,15 +46,17 @@ class TradingCallbacks(DefaultCallbacks):
     """
     Extract trading metrics from env info at episode end.
 
-    RLlib automatically aggregates custom_metrics across episodes and
-    reports mean/min/max in the training result dict.
+    New API stack: uses metrics_logger.log_value() instead of
+    episode.custom_metrics. RLlib auto-aggregates (mean) across episodes
+    and reports under result["env_runners"]["<key>"].
     """
 
-    def on_episode_end(self, *, worker, base_env, policies, episode, env_index, **kwargs):
+    def on_episode_end(self, *, episode, env_runner, metrics_logger, env, env_index, **kwargs):
         """Called at the end of each episode. Extract trading metrics from info."""
-        info = episode.last_info_for()
-        if info is None:
+        infos = episode.get_infos()
+        if not infos:
             return
+        info = infos[-1]
 
         # Extract metrics from BaseTradingEnv._get_info()
         total_pnl = info.get("total_pnl", 0.0)
@@ -67,10 +70,10 @@ class TradingCallbacks(DefaultCallbacks):
         win_rate = winning_trades / max(total_trades, 1)
         max_drawdown = info.get("max_drawdown", 0.0)
 
-        # Log as custom metrics (RLlib aggregates mean/min/max automatically)
-        episode.custom_metrics["total_return"] = total_return
-        episode.custom_metrics["max_drawdown"] = max_drawdown
-        episode.custom_metrics["win_rate"] = win_rate
-        episode.custom_metrics["total_trades"] = total_trades
-        episode.custom_metrics["total_pnl"] = total_pnl
-        episode.custom_metrics["winning_trades"] = winning_trades
+        # Log via MetricsLogger (new API stack)
+        metrics_logger.log_value("total_return", total_return)
+        metrics_logger.log_value("max_drawdown", max_drawdown)
+        metrics_logger.log_value("win_rate", win_rate)
+        metrics_logger.log_value("total_trades", total_trades)
+        metrics_logger.log_value("total_pnl", total_pnl)
+        metrics_logger.log_value("winning_trades", winning_trades)

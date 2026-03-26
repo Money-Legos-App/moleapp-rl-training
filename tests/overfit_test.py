@@ -348,7 +348,6 @@ def run_overfit_test(
         )
         .env_runners(
             num_env_runners=0,  # Local worker only for determinism
-            observation_filter="MeanStdFilter",
         )
         .training(
             lr=1e-3,               # High — aggressive learning
@@ -360,7 +359,9 @@ def run_overfit_test(
             lambda_=0.95,
             clip_param=0.2,
             grad_clip=0.5,
-            model={
+        )
+        .rl_module(
+            model_config={
                 "fcnet_hiddens": [128, 128],  # Small net — easier to overfit
                 "fcnet_activation": "tanh",
             },
@@ -385,7 +386,7 @@ def run_overfit_test(
         result = algo.train()
         if verbose and (i + 1) % 20 == 0:
             reward = result.get("env_runners", {}).get("episode_reward_mean", 0)
-            steps = result.get("timesteps_total", result.get("num_env_steps_sampled_lifetime", 0))
+            steps = result.get("num_env_steps_sampled_lifetime", result.get("timesteps_total", 0))
             print(f"  Iter {i + 1}/{n_iterations}: steps={steps}, reward={reward:.2f}")
 
     train_time = time.time() - start_time

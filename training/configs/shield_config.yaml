@@ -27,9 +27,7 @@ model:
 # Parallelism
 num_env_runners: 4
 num_envs_per_env_runner: 1
-
-# Observation normalization (replaces VecNormalize)
-observation_filter: MeanStdFilter
+# Observation normalization: handled by gym.wrappers.NormalizeObservation in env registration
 
 # Environment Parameters
 env_config:

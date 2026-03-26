@@ -23,7 +23,7 @@ model:
 
 num_env_runners: 4
 num_envs_per_env_runner: 1
-observation_filter: MeanStdFilter
+# Observation normalization: handled by gym.wrappers.NormalizeObservation in env registration
 
 env_config:
   max_leverage: 2

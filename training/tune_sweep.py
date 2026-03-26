@@ -100,7 +100,7 @@ def build_sweep_config(
         )
         .env_runners(
             num_env_runners=2,
-            observation_filter="MeanStdFilter",
+            # observation normalization handled by env wrapper
         )
         .training(
             lr=tune.loguniform(1e-5, 1e-3),
@@ -250,7 +250,7 @@ def run_dry_run(episode_dir: str = "data/episodes", steps: int = 100):
         )
         .env_runners(
             num_env_runners=0,  # local worker only
-            observation_filter="MeanStdFilter",
+            # observation normalization handled by env wrapper
         )
         .training(
             lr=1e-4,

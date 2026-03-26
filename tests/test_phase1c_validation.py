@@ -414,7 +414,7 @@ class TestMicroBatchOverfit:
         config = (
             PPOConfig()
             .environment(env="OverfitBullishEnv", env_config=env_config)
-            .env_runners(num_env_runners=0, observation_filter="MeanStdFilter")
+            .env_runners(num_env_runners=0)
             .training(
                 lr=1e-3,
                 entropy_coeff=0.0,
@@ -576,7 +576,7 @@ class TestMicroBatchOverfit:
         config = (
             PPOConfig()
             .environment(env="SimplePnLEnv", env_config=env_config)
-            .env_runners(num_env_runners=0, observation_filter="MeanStdFilter")
+            .env_runners(num_env_runners=0)
             .training(
                 lr=1e-3,
                 entropy_coeff=0.0,
