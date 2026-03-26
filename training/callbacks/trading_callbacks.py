@@ -49,11 +49,16 @@ class TradingCallbacks(DefaultCallbacks):
     reports mean/min/max in the training result dict.
     """
 
-    def on_episode_end(self, *, episode, env_runner, base_env, env_index, rl_module, metrics_logger, **kwargs):
+    def on_episode_end(self, *, episode, env_runner=None, metrics_logger=None, env_index=None, rl_module=None, **kwargs):
         """Called at the end of each episode. Extract trading metrics from info."""
-        # Get the last info dict from the episode
-        info = episode.last_info_for()
-        if info is None:
+        # New API stack: use get_infos(-1); old API: last_info_for()
+        try:
+            infos = episode.get_infos(-1)
+            info = infos if isinstance(infos, dict) else (infos[0] if infos else None)
+        except (AttributeError, TypeError):
+            info = episode.last_info_for() if hasattr(episode, "last_info_for") else None
+
+        if info is None or metrics_logger is None:
             return
 
         # Extract metrics from BaseTradingEnv._get_info()
