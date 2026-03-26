@@ -103,6 +103,10 @@ def build_ppo_config(profile: str, config: dict, env_config: dict) -> PPOConfig:
 
     ppo_config = (
         PPOConfig()
+        .api_stack(
+            enable_rl_module_and_learner=False,
+            enable_env_runner_and_connector_v2=False,
+        )
         .environment(
             env=env_name,
             env_config=env_config,
@@ -139,13 +143,10 @@ def build_ppo_config(profile: str, config: dict, env_config: dict) -> PPOConfig:
         )
     )
 
-    # GPU support (auto-detect or explicit)
+    # GPU support (auto-detect or explicit) — old stack uses resources()
     num_gpus = _resolve_num_gpus(config.get("num_gpus", 0))
     if num_gpus > 0:
-        ppo_config.learners(
-            num_learners=config.get("num_learners", 1),
-            num_gpus_per_learner=config.get("num_gpus_per_learner", 1),
-        )
+        ppo_config.resources(num_gpus=num_gpus)
 
     return ppo_config
 
@@ -261,32 +262,31 @@ def train(
         if wandb_run:
             log_data = {
                 "train/timesteps": total_steps,
-                "train/episode_reward_mean": result.get("env_runners", {}).get("episode_reward_mean", 0),
-                "train/episode_len_mean": result.get("env_runners", {}).get("episode_len_mean", 0),
+                "train/episode_reward_mean": result.get("episode_reward_mean", result.get("env_runners", {}).get("episode_reward_mean", 0)),
+                "train/episode_len_mean": result.get("episode_len_mean", result.get("env_runners", {}).get("episode_len_mean", 0)),
             }
 
-            # Learner stats
-            learner_info = result.get("info", {}).get("learner", {}).get("default_policy", {})
+            # Learner stats (old stack uses info.learner.default_policy)
+            learner_info = result.get("info", {}).get("learner", {}).get("default_policy", {}).get("learner_stats", {})
             if learner_info:
                 log_data["train/policy_loss"] = learner_info.get("policy_loss", 0)
                 log_data["train/vf_loss"] = learner_info.get("vf_loss", 0)
                 log_data["train/entropy"] = learner_info.get("entropy", 0)
 
-            # Trading-specific metrics from TradingCallbacks (logged via metrics_logger)
-            env_runners = result.get("env_runners", {})
+            # Trading-specific metrics from TradingCallbacks (old stack: custom_metrics)
+            custom_metrics = result.get("custom_metrics", {})
             for metric_key in ("total_return", "max_drawdown", "win_rate", "total_trades", "total_pnl"):
-                val = env_runners.get(metric_key, None)
+                val = custom_metrics.get(f"{metric_key}_mean", None)
                 if val is not None:
-                    # metrics_logger stores mean by default
                     log_data[f"train/{metric_key}"] = val
 
             # Eval metrics
             eval_results = result.get("evaluation", {})
             if eval_results:
-                eval_runners = eval_results.get("env_runners", {})
-                log_data["eval/episode_reward_mean"] = eval_runners.get("episode_reward_mean", 0)
+                log_data["eval/episode_reward_mean"] = eval_results.get("episode_reward_mean", 0)
+                eval_custom = eval_results.get("custom_metrics", {})
                 for metric_key in ("total_return", "max_drawdown", "win_rate", "total_trades", "total_pnl"):
-                    val = eval_runners.get(metric_key, None)
+                    val = eval_custom.get(f"{metric_key}_mean", None)
                     if val is not None:
                         log_data[f"eval/{metric_key}"] = val
 
@@ -325,7 +325,8 @@ def train(
 def _save_norm_stats(algo, output_path: Path, profile: str):
     """Extract MeanStdFilter stats and save in production-compatible format."""
     try:
-        filters = algo.env_runner.filters
+        # Old API stack uses workers.local_worker().filters
+        filters = algo.workers.local_worker().filters
         if "default_policy" in filters:
             obs_filter = filters["default_policy"]
             norm_stats = {

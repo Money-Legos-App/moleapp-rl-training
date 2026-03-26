@@ -49,16 +49,10 @@ class TradingCallbacks(DefaultCallbacks):
     reports mean/min/max in the training result dict.
     """
 
-    def on_episode_end(self, *, episode, env_runner=None, metrics_logger=None, env_index=None, rl_module=None, **kwargs):
+    def on_episode_end(self, *, worker, base_env, policies, episode, env_index, **kwargs):
         """Called at the end of each episode. Extract trading metrics from info."""
-        # New API stack: use get_infos(-1); old API: last_info_for()
-        try:
-            infos = episode.get_infos(-1)
-            info = infos if isinstance(infos, dict) else (infos[0] if infos else None)
-        except (AttributeError, TypeError):
-            info = episode.last_info_for() if hasattr(episode, "last_info_for") else None
-
-        if info is None or metrics_logger is None:
+        info = episode.last_info_for()
+        if info is None:
             return
 
         # Extract metrics from BaseTradingEnv._get_info()
@@ -73,10 +67,10 @@ class TradingCallbacks(DefaultCallbacks):
         win_rate = winning_trades / max(total_trades, 1)
         max_drawdown = info.get("max_drawdown", 0.0)
 
-        # Log as custom metrics (RLlib aggregates these automatically)
-        metrics_logger.log_value("total_return", total_return)
-        metrics_logger.log_value("max_drawdown", max_drawdown)
-        metrics_logger.log_value("win_rate", win_rate)
-        metrics_logger.log_value("total_trades", total_trades)
-        metrics_logger.log_value("total_pnl", total_pnl)
-        metrics_logger.log_value("winning_trades", winning_trades)
+        # Log as custom metrics (RLlib aggregates mean/min/max automatically)
+        episode.custom_metrics["total_return"] = total_return
+        episode.custom_metrics["max_drawdown"] = max_drawdown
+        episode.custom_metrics["win_rate"] = win_rate
+        episode.custom_metrics["total_trades"] = total_trades
+        episode.custom_metrics["total_pnl"] = total_pnl
+        episode.custom_metrics["winning_trades"] = winning_trades
