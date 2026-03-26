@@ -178,7 +178,7 @@ def train(
         assets: Assets to train on (default: all 15 supported assets)
     """
     config = load_config(config_path)
-    output_path = Path(output_dir) / profile
+    output_path = (Path(output_dir) / profile).resolve()
     output_path.mkdir(parents=True, exist_ok=True)
 
     logger.info(f"Training {profile} model with config: {config_path}")
