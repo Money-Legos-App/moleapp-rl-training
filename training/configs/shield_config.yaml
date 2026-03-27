@@ -26,8 +26,8 @@ model:
   fcnet_hiddens: [256, 256, 128]   # 3-layer MLP
   fcnet_activation: tanh
 
-# Parallelism — scale to saturate GPU with trajectory data
-num_env_runners: 32
+# Parallelism — 10 runners + 1 learner + 1 driver = 12 of 13 CPUs
+num_env_runners: 10
 num_envs_per_env_runner: 4
 # Observation normalization: handled by gym.wrappers.NormalizeObservation in env registration
 
