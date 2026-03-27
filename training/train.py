@@ -326,7 +326,7 @@ def train(
             total_return = env_runners.get("total_return", 0)
             logger.info(
                 f"[Iter {iteration}] steps={total_steps:,} "
-                f"reward={reward_mean:.2f} win_rate={win_rate:.2f} return={total_return:.3f}"
+                f"reward={reward_mean:.6f} win_rate={win_rate:.2f} return={total_return:.3f}"
             )
 
         # Checkpoint
