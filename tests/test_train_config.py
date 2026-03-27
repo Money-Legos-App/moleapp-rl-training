@@ -133,6 +133,40 @@ class TestYAMLConfigParsing:
         """Both strategies should use the same entropy schedule."""
         assert shield_config["entropy_coeff_schedule"] == builder_config["entropy_coeff_schedule"]
 
+    # --- LR Schedule ---
+
+    def test_shield_has_lr_schedule(self, shield_config):
+        schedule = shield_config.get("lr_schedule")
+        assert schedule is not None, "Shield config missing lr_schedule"
+        assert isinstance(schedule, list)
+        assert len(schedule) == 3  # warmup start, peak, decay end
+
+    def test_builder_has_lr_schedule(self, builder_config):
+        schedule = builder_config.get("lr_schedule")
+        assert schedule is not None
+        assert len(schedule) == 3
+
+    def test_lr_schedule_warmup_then_decay(self, shield_config):
+        """LR should start low, ramp up, then decay."""
+        schedule = shield_config["lr_schedule"]
+        start_lr = schedule[0][1]
+        peak_lr = schedule[1][1]
+        end_lr = schedule[2][1]
+        assert start_lr < peak_lr, "LR should warm up"
+        assert end_lr < peak_lr, "LR should decay after peak"
+
+    def test_shield_no_flat_lr(self, shield_config):
+        """When using lr_schedule, flat lr should NOT be present."""
+        assert "lr" not in shield_config
+
+    # --- Clip Param ---
+
+    def test_shield_clip_param_015(self, shield_config):
+        assert shield_config["clip_param"] == 0.15
+
+    def test_builder_clip_param_015(self, builder_config):
+        assert builder_config["clip_param"] == 0.15
+
 
 # ──────────────────────────────────────────────────────────────────────
 # Test: build_ppo_config() Integration
@@ -172,6 +206,20 @@ class TestBuildPPOConfig:
         ppo_config = build_ppo_config("shield", shield_config, env_config)
         assert ppo_config.gamma == 0.995
 
+    def test_clip_param_propagated(self, shield_config):
+        env_config = _dummy_env_config()
+        ppo_config = build_ppo_config("shield", shield_config, env_config)
+        assert ppo_config.clip_param == 0.15
+
+    def test_lr_schedule_propagated(self, shield_config):
+        """lr should be the schedule list, not a flat float."""
+        env_config = _dummy_env_config()
+        ppo_config = build_ppo_config("shield", shield_config, env_config)
+        assert isinstance(ppo_config.lr, list), (
+            f"Expected lr to be a schedule (list), got {type(ppo_config.lr)}"
+        )
+        assert len(ppo_config.lr) == 3
+
     def test_eval_parallel_propagated(self, shield_config):
         env_config = _dummy_env_config()
         ppo_config = build_ppo_config("shield", shield_config, env_config)
@@ -187,6 +235,16 @@ class TestBuildPPOConfig:
         ppo_config = build_ppo_config("shield", shield_config, env_config)
         assert ppo_config.evaluation_sample_timeout_s == 600.0
 
+    def test_flat_lr_fallback(self):
+        """When no lr_schedule, flat lr is used."""
+        config = {
+            "lr": 0.001,
+            "model": {"fcnet_hiddens": [64, 64], "fcnet_activation": "tanh"},
+        }
+        env_config = _dummy_env_config()
+        ppo_config = build_ppo_config("shield", config, env_config)
+        assert ppo_config.lr == 0.001
+
     def test_flat_entropy_fallback(self):
         """When no schedule is in config, flat entropy_coeff is used."""
         config = {
@@ -196,3 +254,36 @@ class TestBuildPPOConfig:
         env_config = _dummy_env_config()
         ppo_config = build_ppo_config("shield", config, env_config)
         assert ppo_config.entropy_coeff == 0.05
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Test: Reward Normalization Wrapper
+# ──────────────────────────────────────────────────────────────────────
+
+class TestRewardNormalization:
+    def test_env_has_normalize_reward_wrapper(self):
+        """_make_env should wrap env with NormalizeReward."""
+        from gymnasium.wrappers import NormalizeReward
+        from envs import _make_env
+        from envs.shield_env import ShieldTradingEnv
+        from tests.test_environments import _make_synthetic_data
+
+        market_data, features = _make_synthetic_data(n_steps=200)
+        cfg = {
+            "market_data": market_data,
+            "feature_data": features,
+            "max_leverage": 1,
+            "max_positions": 2,
+            "initial_capital": 1000.0,
+            "max_sl_pct": 0.03,
+            "min_sl_pct": 0.005,
+            "max_tp_pct": 0.075,
+            "min_tp_pct": 0.01,
+            "episode_length": 100,
+            "max_drawdown_pct": 0.10,
+        }
+        env = _make_env(ShieldTradingEnv, cfg)
+        # NormalizeReward should be the outermost wrapper
+        assert isinstance(env, NormalizeReward), (
+            f"Expected NormalizeReward wrapper, got {type(env).__name__}"
+        )

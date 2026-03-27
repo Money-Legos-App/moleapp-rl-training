@@ -6,10 +6,13 @@ env: BuilderTradingEnv
 
 total_timesteps: 10_000_000
 
-lr: 0.0003
+lr_schedule:                       # Warmup + decay — let VF learn before policy moves
+  - [0, 0.00001]                   # Start tiny — random actions, VF is garbage
+  - [100000, 0.0003]               # Ramp to full LR by 100K steps
+  - [8000000, 0.00003]             # Decay to 10% by 8M — fine-tune, don't thrash
 gamma: 0.995                     # Slightly higher discount — trend following
 lambda_: 0.95
-clip_param: 0.2
+clip_param: 0.15                 # Tighter clipping — slow, methodical policy changes
 num_epochs: 6                    # Fewer passes — larger batch compensates
 minibatch_size: 256              # Larger batches → better GPU utilization
 train_batch_size_per_learner: 16384 # Larger batch — 128 envs fill this fast

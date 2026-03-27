@@ -117,7 +117,8 @@ def build_ppo_config(profile: str, config: dict, env_config: dict) -> PPOConfig:
             num_envs_per_env_runner=config.get("num_envs_per_env_runner", 1),
         )
         .training(
-            lr=config.get("lr", 3e-4),
+            # LR: schedule (list of [timestep, value]) or flat float
+            lr=config.get("lr_schedule", config.get("lr", 3e-4)),
             gamma=config.get("gamma", 0.99),
             lambda_=config.get("lambda_", 0.95),
             clip_param=config.get("clip_param", 0.2),
