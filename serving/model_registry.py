@@ -19,6 +19,9 @@ from ray.rllib.algorithms.algorithm import Algorithm
 
 from data.preprocessors.feature_engineer import FEATURE_HASH, FEATURE_VERSION, OBS_DIM
 
+# Register custom envs so Algorithm.from_checkpoint() can find them
+import envs as _envs  # noqa: F401
+
 logger = logging.getLogger(__name__)
 
 
