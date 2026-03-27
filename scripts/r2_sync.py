@@ -45,6 +45,7 @@ R2_PREFIXES = {
     "processed": "processed/1h/", # Validated, training-ready parquets
     "episodes": "episodes/",      # Pre-built episodes (market_data.npy + features.pkl per asset)
     "sweeps": "sweeps/",          # Future: 6-month slices for W&B sweeps
+    "models": "models/onnx/",     # Trained ONNX models for agent-service
     "legacy": "raw-data/",        # Legacy HL dumps (backward compat)
 }
 R2_PREFIX = R2_PREFIXES["legacy"]  # Default for backward compat
