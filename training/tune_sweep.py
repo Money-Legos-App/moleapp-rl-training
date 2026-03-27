@@ -271,7 +271,7 @@ def run_dry_run(episode_dir: str = "data/episodes", steps: int = 100):
         .callbacks(callbacks_class=TradingCallbacks)
     )
 
-    algo = config.build()
+    algo = config.build_algo()
 
     for i in range(max(1, steps // 2048)):
         result = algo.train()

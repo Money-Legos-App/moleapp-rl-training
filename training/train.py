@@ -193,16 +193,30 @@ def train(
     market_data, feature_data = _load_training_data(data_dir, episode_dir, assets=assets)
     logger.info(f"Loaded {len(market_data)} timesteps of market data")
 
-    # Split train/eval (80/20)
+    # Split train/eval (80/20) and save to shared files
+    # (avoids serializing 200K+ MarketFeatures through Ray's object store)
     split_idx = int(len(market_data) * 0.8)
     train_market = market_data[:split_idx]
     train_features = feature_data[:split_idx]
+    eval_market = market_data[split_idx:]
+    eval_features = feature_data[split_idx:]
 
-    # Build env_config with market data + env_kwargs
+    cache_dir = Path("/tmp/rl_training_data")
+    cache_dir.mkdir(parents=True, exist_ok=True)
+
+    np.save(cache_dir / "train_market.npy", train_market)
+    with open(cache_dir / "train_features.pkl", "wb") as f:
+        pickle.dump(train_features, f, protocol=pickle.HIGHEST_PROTOCOL)
+    np.save(cache_dir / "eval_market.npy", eval_market)
+    with open(cache_dir / "eval_features.pkl", "wb") as f:
+        pickle.dump(eval_features, f, protocol=pickle.HIGHEST_PROTOCOL)
+    logger.info(f"Saved training data to {cache_dir} (train={len(train_features)}, eval={len(eval_features)})")
+
+    # Build env_config with file paths instead of raw data
     env_kwargs = config.get("env_config", config.get("env_kwargs", {}))
     env_config = {
-        "market_data": train_market,
-        "feature_data": train_features,
+        "market_data_path": str(cache_dir / "train_market.npy"),
+        "feature_data_path": str(cache_dir / "train_features.pkl"),
         **env_kwargs,
     }
 
@@ -217,12 +231,10 @@ def train(
     else:
         ppo_config = build_ppo_config(profile, config, env_config)
 
-        # Set eval env config with eval data
-        eval_market = market_data[split_idx:]
-        eval_features = feature_data[split_idx:]
+        # Set eval env config with eval data file paths
         eval_env_config = {
-            "market_data": eval_market,
-            "feature_data": eval_features,
+            "market_data_path": str(cache_dir / "eval_market.npy"),
+            "feature_data_path": str(cache_dir / "eval_features.pkl"),
             **env_kwargs,
         }
         ppo_config.evaluation(evaluation_config=PPOConfig.overrides(
@@ -230,7 +242,7 @@ def train(
             explore=False,
         ))
 
-        algo = ppo_config.build()
+        algo = ppo_config.build_algo()
 
     # W&B integration
     wandb_run = None

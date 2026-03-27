@@ -379,7 +379,7 @@ def run_overfit_test(
     print(f"  LR=1e-3, ent_coef=0.0, num_epochs=20, minibatch=64")
     print()
 
-    algo = config.build()
+    algo = config.build_algo()
     start_time = time.time()
 
     for i in range(n_iterations):

@@ -88,8 +88,10 @@ class BaseTradingEnv(gym.Env):
 
     def __init__(
         self,
-        market_data: np.ndarray,  # shape: (timesteps, n_features) — raw OHLCV+indicators
-        feature_data: list[MarketFeatures],  # pre-built MarketFeatures per timestep
+        market_data: np.ndarray | None = None,  # shape: (timesteps, n_features) — raw OHLCV+indicators
+        feature_data: list[MarketFeatures] | None = None,  # pre-built MarketFeatures per timestep
+        market_data_path: str | None = None,  # Alternative: load from file (avoids Ray serialization)
+        feature_data_path: str | None = None,
         max_leverage: int = 3,
         max_positions: int = 5,
         initial_capital: float = 1000.0,
@@ -103,6 +105,17 @@ class BaseTradingEnv(gym.Env):
         profile_name: str = "base",
     ):
         super().__init__()
+
+        # Load data from files if paths provided (avoids 200K+ object serialization through Ray)
+        if market_data is None and market_data_path:
+            market_data = np.load(market_data_path)
+        if feature_data is None and feature_data_path:
+            import pickle as _pkl
+            with open(feature_data_path, "rb") as _f:
+                feature_data = _pkl.load(_f)
+
+        assert market_data is not None, "Must provide market_data or market_data_path"
+        assert feature_data is not None, "Must provide feature_data or feature_data_path"
 
         self.market_data = market_data
         self.feature_data = feature_data

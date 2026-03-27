@@ -428,7 +428,7 @@ class TestMicroBatchOverfit:
             )
         )
 
-        algo = config.build()
+        algo = config.build_algo()
         # 50 iterations (~12,500 env steps) — enough to prove gradient flow
         for _ in range(50):
             algo.train()
@@ -590,7 +590,7 @@ class TestMicroBatchOverfit:
             )
         )
 
-        algo = config.build()
+        algo = config.build_algo()
         # 50 iterations — enough to prove agent can profit on easy data
         for _ in range(50):
             algo.train()
