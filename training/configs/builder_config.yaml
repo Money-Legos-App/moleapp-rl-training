@@ -10,9 +10,9 @@ lr: 0.0003
 gamma: 0.995                     # Slightly higher discount — trend following
 lambda_: 0.95
 clip_param: 0.2
-num_epochs: 10
+num_epochs: 6                    # Fewer passes — larger batch compensates
 minibatch_size: 256              # Larger batches → better GPU utilization
-train_batch_size_per_learner: 4096
+train_batch_size_per_learner: 16384 # Larger batch — 128 envs fill this fast
 entropy_coeff_schedule:          # Anneal exploration: high early, low late
   - [0, 0.01]
   - [10_000_000, 0.001]
@@ -23,8 +23,8 @@ model:
   fcnet_hiddens: [256, 256, 128]
   fcnet_activation: tanh
 
-num_env_runners: 8
-num_envs_per_env_runner: 2
+num_env_runners: 32
+num_envs_per_env_runner: 4
 # Observation normalization: handled by gym.wrappers.NormalizeObservation in env registration
 
 env_config:

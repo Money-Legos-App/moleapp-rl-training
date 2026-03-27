@@ -101,6 +101,20 @@ class TestYAMLConfigParsing:
     def test_builder_minibatch_256(self, builder_config):
         assert builder_config["minibatch_size"] == 256
 
+    def test_shield_parallelism(self, shield_config):
+        assert shield_config["num_env_runners"] == 32
+        assert shield_config["num_envs_per_env_runner"] == 4
+
+    def test_builder_parallelism(self, builder_config):
+        assert builder_config["num_env_runners"] == 32
+        assert builder_config["num_envs_per_env_runner"] == 4
+
+    def test_shield_batch_size(self, shield_config):
+        assert shield_config["train_batch_size_per_learner"] == 16384
+
+    def test_builder_batch_size(self, builder_config):
+        assert builder_config["train_batch_size_per_learner"] == 16384
+
     def test_shield_gamma_0995(self, shield_config):
         assert shield_config["gamma"] == 0.995
 
