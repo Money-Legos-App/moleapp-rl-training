@@ -136,8 +136,11 @@ def build_ppo_config(profile: str, config: dict, env_config: dict) -> PPOConfig:
         )
         .evaluation(
             evaluation_interval=config.get("evaluation", {}).get("evaluation_interval", 25),
-            evaluation_duration=config.get("evaluation", {}).get("evaluation_duration", 20),
+            evaluation_duration=config.get("evaluation", {}).get("evaluation_duration", 5),
+            evaluation_duration_unit="episodes",
             evaluation_num_env_runners=config.get("evaluation", {}).get("num_env_runners", 1),
+            evaluation_sample_timeout_s=600,  # 10 min timeout for long episodes
+            evaluation_force_reset_envs_before_iteration=False,
             evaluation_config=PPOConfig.overrides(explore=False),
         )
         .callbacks(

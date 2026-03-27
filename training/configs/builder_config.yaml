@@ -37,8 +37,8 @@ env_config:
   max_drawdown_pct: 0.20         # 20% kill switch — terminates episode
 
 evaluation:
-  evaluation_interval: 25
-  evaluation_duration: 20
+  evaluation_interval: 50
+  evaluation_duration: 5
   num_env_runners: 1
 
 checkpoint_freq: 50

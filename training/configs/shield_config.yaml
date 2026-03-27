@@ -43,8 +43,8 @@ env_config:
 
 # Evaluation
 evaluation:
-  evaluation_interval: 25        # Every 25 training iterations
-  evaluation_duration: 20        # Number of eval episodes
+  evaluation_interval: 50        # Every 50 training iterations (less frequent, less overhead)
+  evaluation_duration: 5         # 5 eval episodes (unit=episodes set in train.py)
   num_env_runners: 1
 
 # Checkpointing (iterations, not timesteps)
