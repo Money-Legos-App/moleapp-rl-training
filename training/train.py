@@ -122,9 +122,11 @@ def build_ppo_config(profile: str, config: dict, env_config: dict) -> PPOConfig:
             lambda_=config.get("lambda_", 0.95),
             clip_param=config.get("clip_param", 0.2),
             num_epochs=config.get("num_epochs", 10),
-            minibatch_size=config.get("minibatch_size", 64),
+            minibatch_size=config.get("minibatch_size", 256),
             train_batch_size_per_learner=config.get("train_batch_size_per_learner", 2048),
+            # Entropy: use schedule if provided, else flat coefficient
             entropy_coeff=config.get("entropy_coeff", 0.01),
+            entropy_coeff_schedule=config.get("entropy_coeff_schedule", None),
             vf_loss_coeff=config.get("vf_loss_coeff", 0.5),
             grad_clip=config.get("grad_clip", 0.5),
         )
@@ -141,6 +143,9 @@ def build_ppo_config(profile: str, config: dict, env_config: dict) -> PPOConfig:
             evaluation_num_env_runners=config.get("evaluation", {}).get("num_env_runners", 1),
             evaluation_sample_timeout_s=600,  # 10 min timeout for long episodes
             evaluation_force_reset_envs_before_iteration=False,
+            evaluation_parallel_to_training=config.get("evaluation", {}).get(
+                "evaluation_parallel_to_training", False
+            ),
             evaluation_config=PPOConfig.overrides(explore=False),
         )
         .callbacks(

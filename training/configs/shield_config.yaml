@@ -9,13 +9,15 @@ total_timesteps: 10_000_000     # ~14h on RTX 4090 (8 runners), ~8h on A100
 
 # PPO Hyperparameters
 lr: 0.0003
-gamma: 0.99                      # High discount — Shield cares about long-term stability
+gamma: 0.995                     # Higher discount — Shield plans over longer horizons
 lambda_: 0.95                    # GAE for advantage estimation
 clip_param: 0.2                  # PPO clipping parameter
 num_epochs: 10                   # Passes over collected batch
-minibatch_size: 64               # Mini-batch size for each gradient step
+minibatch_size: 256              # Larger batches → better GPU utilization
 train_batch_size_per_learner: 4096  # Steps before each PPO update
-entropy_coeff: 0.01              # Entropy bonus for exploration
+entropy_coeff_schedule:          # Anneal exploration: high early, low late
+  - [0, 0.01]
+  - [10_000_000, 0.001]
 vf_loss_coeff: 0.5               # Value function coefficient
 grad_clip: 0.5                   # Gradient clipping
 
@@ -45,6 +47,7 @@ env_config:
 evaluation:
   evaluation_interval: 50        # Every 50 training iterations (less frequent, less overhead)
   evaluation_duration: 5         # 5 eval episodes (unit=episodes set in train.py)
+  evaluation_parallel_to_training: true  # Eval runs in background, doesn't block training
   num_env_runners: 1
 
 # Checkpointing (iterations, not timesteps)
