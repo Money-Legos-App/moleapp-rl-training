@@ -46,3 +46,4 @@ line-length = 100
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = ["slow: marks tests as slow (PPO training, deselect with '-m not slow')"]

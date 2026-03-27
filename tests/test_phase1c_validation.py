@@ -349,15 +349,18 @@ class TestRandomPolicyBleed:
 # ══════════════════════════════════════════════════════════════════════
 
 
+@pytest.mark.slow
 class TestMicroBatchOverfit:
     """
-    3-day bullish BTC slice, PPO for 500-1000 iterations.
+    3-day bullish BTC slice, PPO for 50 iterations.
     Agent MUST learn to go long (action[0] > 0.1 most of the time).
 
     This proves:
     - Observation encodes price direction
     - Reward function rewards correct trades
     - PPO gradient flows correctly
+
+    Marked @slow — skipped during setup, run explicitly with: pytest -m slow
     """
 
     def test_ppo_learns_to_go_long_on_bullish_data(self):

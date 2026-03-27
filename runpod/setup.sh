@@ -87,8 +87,8 @@ else
 fi
 
 # ── 6. Run tests ────────────────────────────────────────────────────
-echo "[6/6] Running tests..."
-python -m pytest tests/ -v --tb=short
+echo "[6/6] Running tests (skipping slow PPO tests)..."
+python -m pytest tests/ -v --tb=short -m "not slow"
 
 echo ""
 echo "=== Setup Complete ==="
