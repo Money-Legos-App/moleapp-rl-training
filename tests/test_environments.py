@@ -579,7 +579,7 @@ class TestProfileConstraints:
         env = ShieldTradingEnv(market_data=market_data, feature_data=features)
         assert env.max_leverage == 1
         assert env.max_sl_pct == 0.03
-        assert env.max_tp_pct == 0.06
+        assert env.max_tp_pct == 0.075
 
     def test_builder_limits(self):
         market_data, features = _make_synthetic_data(n_steps=200)

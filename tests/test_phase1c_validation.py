@@ -322,9 +322,11 @@ class TestRandomPolicyBleed:
             f"{label}: Random agent only made {avg_trades:.1f} avg trades — "
             f"action parsing may be broken"
         )
-        assert avg_fees > 0.5, (
+        # Shield has 25% max position cap → smaller trades → lower fees
+        min_fees = 0.1 if label == "Shield" else 0.5
+        assert avg_fees > min_fees, (
             f"{label}: Random agent paid only ${avg_fees:.2f} avg fees — "
-            f"fee calculation may be broken"
+            f"fee calculation may be broken (threshold: ${min_fees:.2f})"
         )
 
     def test_no_random_seed_profits_consistently(self):
