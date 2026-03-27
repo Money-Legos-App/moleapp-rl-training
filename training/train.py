@@ -124,9 +124,8 @@ def build_ppo_config(profile: str, config: dict, env_config: dict) -> PPOConfig:
             num_epochs=config.get("num_epochs", 10),
             minibatch_size=config.get("minibatch_size", 256),
             train_batch_size_per_learner=config.get("train_batch_size_per_learner", 2048),
-            # Entropy: use schedule if provided, else flat coefficient
-            entropy_coeff=config.get("entropy_coeff", 0.01),
-            entropy_coeff_schedule=config.get("entropy_coeff_schedule", None),
+            # Entropy: schedule (list of [timestep, value]) or flat float
+            entropy_coeff=config.get("entropy_coeff_schedule", config.get("entropy_coeff", 0.01)),
             vf_loss_coeff=config.get("vf_loss_coeff", 0.5),
             grad_clip=config.get("grad_clip", 0.5),
         )
