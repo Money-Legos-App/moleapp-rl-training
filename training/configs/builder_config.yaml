@@ -46,7 +46,7 @@ evaluation:
 
 checkpoint_freq: 50
 
-num_gpus: auto
+num_gpus: 1
 num_learners: 1
 num_gpus_per_learner: 1
 
