@@ -133,6 +133,9 @@ cd /workspace
 git clone https://github.com/Money-Legos-App/moleapp-rl-training.git
 cd moleapp-rl-training
 
+# Install tmux for background training (recommended)
+apt-get update && apt-get install -y tmux
+
 # Run the automated setup (installs deps, pulls data from R2, runs tests)
 bash runpod/setup.sh
 ```
@@ -146,11 +149,13 @@ bash runpod/setup.sh
 [3/6] Authenticates W&B via WANDB_API_KEY
 [4/6] Pulls parquets + episodes from Cloudflare R2
 [5/6] Verifies episode data exists for all 15 assets (builds from parquets if missing)
-[6/6] Runs pytest to validate the environment
+[6/6] Runs pytest to validate environments (PPO overfit tests are skipped — marked @slow)
 ```
 
 Expected output at the end:
 ```
+126 passed, 2 deselected in ~2 min
+
 === Setup Complete ===
 
 GPU:
@@ -163,48 +168,57 @@ Training commands (GPU auto-detected, all 15 assets by default):
   Builder: python -m training.train --profile builder --config training/configs/builder_config.yaml
 ```
 
+> **Note:** 2 PPO overfit tests are skipped during setup (marked `@pytest.mark.slow`). These train a PPO model and take several minutes. Run them separately with `python -m pytest tests/ -v -m slow` when the pod is idle.
+
+### If you `git pull` after setup
+
+The `data/` directory is `.gitignore`d, so a `git pull` may clear the cached episodes. Re-pull data without re-running the full setup:
+
+```bash
+python scripts/r2_sync.py download --prefix processed --data-dir data/datasets
+python scripts/r2_sync.py download --prefix episodes --data-dir data/episodes
+```
+
 ---
 
 ## 5. Launch Training
 
+### Suppress RLlib deprecation warnings
+
+RLlib v2.40+ prints many deprecation warnings (UnifiedLogger, RLModule config, etc.) that are internal to Ray and don't affect training. Suppress them:
+
+```bash
+export PYTHONWARNINGS="ignore::DeprecationWarning"
+export RAY_DISABLE_DOCKER_CPU_WARNING=1
+export RAY_DEDUP_LOGS=1
+```
+
+Add these to your shell or prefix the training command.
+
 ### Train Shield first (most constrained, fastest to validate)
 
 ```bash
-# All 15 assets, GPU auto-detected
-python -m training.train --profile shield --config training/configs/shield_config.yaml
-```
+tmux new -s train
 
-### Run in background (survives SSH disconnect)
-
-```bash
-# Use tmux so training continues if your connection drops
-tmux new -s shield
-
-python -m training.train --profile shield --config training/configs/shield_config.yaml
+# Suppress warnings + train
+PYTHONWARNINGS="ignore::DeprecationWarning" RAY_DISABLE_DOCKER_CPU_WARNING=1 \
+  python -m training.train --profile shield --config training/configs/shield_config.yaml
 
 # Detach: Ctrl+B then D
-# Reattach later: tmux attach -t shield
-```
-
-Or use `nohup`:
-
-```bash
-nohup python -m training.train --profile shield --config training/configs/shield_config.yaml > logs/shield.log 2>&1 &
-
-# Monitor:
-tail -f logs/shield.log
+# Reattach later: tmux attach -t train
 ```
 
 ### Train both profiles sequentially
 
 ```bash
-tmux new -s training
+tmux new -s train
 
-# Shield → Builder
-python -m training.train --profile shield  --config training/configs/shield_config.yaml && \
-python -m training.train --profile builder --config training/configs/builder_config.yaml
+PYTHONWARNINGS="ignore::DeprecationWarning" RAY_DISABLE_DOCKER_CPU_WARNING=1 bash -c '
+  python -m training.train --profile shield  --config training/configs/shield_config.yaml && \
+  python -m training.train --profile builder --config training/configs/builder_config.yaml
+'
 
-# Detach: Ctrl+B then D
+# Ctrl+B, D to detach
 ```
 
 ### Train on specific assets only (faster iteration)
@@ -224,6 +238,10 @@ python -m training.train \
   --config training/configs/shield_config.yaml \
   --resume models/shield/checkpoints/checkpoint_000050
 ```
+
+### How training data is loaded
+
+Training data (254K+ timesteps across 15 assets) is saved to `/tmp/rl_training_data/` as `.npy` and `.pkl` files. Each Ray env runner loads data from these local files instead of receiving them through Ray's object store — this avoids a 10+ minute serialization bottleneck.
 
 ---
 
@@ -259,11 +277,19 @@ Every 5 iterations, training prints:
 ### GPU utilization
 
 ```bash
-# In a separate tmux pane or terminal
+# In a separate tmux pane (Ctrl+B, %) or terminal
 watch -n 5 nvidia-smi
 ```
 
 You should see ~50-80% GPU utilization during learner updates, lower during env stepping (which happens on CPU).
+
+### RunPod Telemetry
+
+Check the **Telemetry** tab in the RunPod dashboard for:
+- **CPU load**: Should be 30-60% during training (env runners use CPU)
+- **Memory**: Should stay under 60% (38 GiB available on most pods)
+- **GPU utilization**: Should pulse between 0-80% (learner updates are bursty)
+- **Processes**: ~800-1300 is normal (Ray spawns many worker processes)
 
 ---
 
@@ -417,6 +443,14 @@ export R2_ENDPOINT_URL=https://9507330fe5a8c228ea49f6e5c6c6b659.r2.cloudflaresto
 export R2_BUCKET_NAME=moleapp-rl-data
 ```
 
+### "No cached episodes" after `git pull`
+
+The `data/` directory is `.gitignore`d. Re-pull data:
+```bash
+python scripts/r2_sync.py download --prefix processed --data-dir data/datasets
+python scripts/r2_sync.py download --prefix episodes --data-dir data/episodes
+```
+
 ### Training crashes with OOM (Out of Memory)
 
 Reduce batch size in the config:
@@ -430,9 +464,18 @@ Or reduce env runners:
 num_env_runners: 2   # was 4
 ```
 
+### Training hangs at startup (no iterations for 5+ minutes)
+
+This is a Ray serialization bottleneck. The fix (already applied) is to pass file paths instead of raw data through `env_config`. If you see this on an older commit:
+
+```bash
+git pull origin main  # get the fix
+# re-pull data if needed (see above)
+```
+
 ### SSH disconnects and training stops
 
-Always use `tmux` or `nohup` (see [Section 5](#5-launch-training)). If you forgot:
+Always use `tmux` (see [Section 5](#5-launch-training)). If you forgot:
 ```bash
 # Check if training is still running
 ps aux | grep training.train
@@ -441,6 +484,15 @@ ps aux | grep training.train
 ls models/shield/checkpoints/
 python -m training.train --profile shield --config training/configs/shield_config.yaml \
   --resume models/shield/checkpoints/checkpoint_000050
+```
+
+### RLlib deprecation warnings
+
+Warnings like `UnifiedLogger will be removed`, `RLModule(config=...) deprecated`, `CSVLogger deprecated` are **internal to RLlib v2.40+** and cannot be fixed from our code. They don't affect training. Suppress with:
+
+```bash
+export PYTHONWARNINGS="ignore::DeprecationWarning"
+export RAY_DISABLE_DOCKER_CPU_WARNING=1
 ```
 
 ### W&B not logging
@@ -467,12 +519,15 @@ ssh root@<pod-ip> -p <port>
 cd /workspace
 git clone https://github.com/Money-Legos-App/moleapp-rl-training.git
 cd moleapp-rl-training
+apt-get update && apt-get install -y tmux
 bash runpod/setup.sh
 
 # 3. Train (in tmux)
 tmux new -s train
-python -m training.train --profile shield  --config training/configs/shield_config.yaml && \
-python -m training.train --profile builder --config training/configs/builder_config.yaml
+PYTHONWARNINGS="ignore::DeprecationWarning" RAY_DISABLE_DOCKER_CPU_WARNING=1 bash -c '
+  python -m training.train --profile shield  --config training/configs/shield_config.yaml && \
+  python -m training.train --profile builder --config training/configs/builder_config.yaml
+'
 # Ctrl+B, D to detach
 
 # 4. Export ONNX (after training)

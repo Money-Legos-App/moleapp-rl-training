@@ -5,7 +5,7 @@ algorithm: PPO
 env: ShieldTradingEnv
 
 # Training loop
-total_timesteps: 10_000_000     # ~40h on A100, ~120h on T4
+total_timesteps: 10_000_000     # ~14h on RTX 4090 (8 runners), ~8h on A100
 
 # PPO Hyperparameters
 lr: 0.0003
@@ -14,7 +14,7 @@ lambda_: 0.95                    # GAE for advantage estimation
 clip_param: 0.2                  # PPO clipping parameter
 num_epochs: 10                   # Passes over collected batch
 minibatch_size: 64               # Mini-batch size for each gradient step
-train_batch_size_per_learner: 2048  # Steps before each PPO update
+train_batch_size_per_learner: 4096  # Steps before each PPO update
 entropy_coeff: 0.01              # Entropy bonus for exploration
 vf_loss_coeff: 0.5               # Value function coefficient
 grad_clip: 0.5                   # Gradient clipping
@@ -25,8 +25,8 @@ model:
   fcnet_activation: tanh
 
 # Parallelism
-num_env_runners: 4
-num_envs_per_env_runner: 1
+num_env_runners: 8
+num_envs_per_env_runner: 2
 # Observation normalization: handled by gym.wrappers.NormalizeObservation in env registration
 
 # Environment Parameters
@@ -36,7 +36,7 @@ env_config:
   initial_capital: 1000.0
   max_sl_pct: 0.03
   min_sl_pct: 0.005
-  max_tp_pct: 0.06
+  max_tp_pct: 0.075
   min_tp_pct: 0.01
   episode_length: 2880           # 120 days of 1h candles (~4 months)
   max_drawdown_pct: 0.10         # 10% kill switch — terminates episode
