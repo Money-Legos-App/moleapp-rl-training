@@ -250,11 +250,11 @@ class TestShieldVolatilityFix:
         env._had_position = False
 
         ctx = {"pnl_pct": 0.0, "drawdown": 0.05, "has_position": False,
-               "step": 100, "funding_cost": 0.0, "current_price": 100.0}
+               "step": 100, "funding_cost": 0.0, "current_price": 100.0,
+               "unrealized_pnl_pct": 0.0}
         reward = env._calculate_reward(ctx)
         # Should only have drawdown penalty + time penalty, NO volatility bonus
-        expected_max = 0.0  # no positive component possible
-        assert reward < expected_max
+        assert reward < 0.0
 
     def test_bonus_after_close(self):
         """Agent should get decaying bonus after closing during drawdown."""
@@ -266,17 +266,19 @@ class TestShieldVolatilityFix:
 
         # Step where position closes (drawdown > 3%)
         ctx1 = {"pnl_pct": 0.0, "drawdown": 0.04, "has_position": False,
-                "step": 50, "funding_cost": 0.0, "current_price": 100.0}
+                "step": 50, "funding_cost": 0.0, "current_price": 100.0,
+                "unrealized_pnl_pct": 0.0}
         env._calculate_reward(ctx1)
         assert env._last_close_step == 50
 
         # Next step: should get bonus (steps_since_close = 1, decay ~ 0.98)
         ctx2 = {"pnl_pct": 0.0, "drawdown": 0.04, "has_position": False,
-                "step": 51, "funding_cost": 0.0, "current_price": 100.0}
+                "step": 51, "funding_cost": 0.0, "current_price": 100.0,
+                "unrealized_pnl_pct": 0.0}
         reward = env._calculate_reward(ctx2)
-        # Reward includes: drawdown penalty (-0.04*0.5=-0.02) + vol bonus (~0.0196) + time penalty
+        # Rewards are ×100 scaled. Reward includes: drawdown penalty + vol bonus + time penalty
         # The vol bonus should make it less negative than without
-        assert reward > -0.025  # with bonus, less negative than pure drawdown penalty
+        assert reward > -2.5  # ×100 scaled: was -0.025
 
     def test_bonus_expires_after_48_steps(self):
         """Bonus should be zero after 48 steps."""
@@ -288,12 +290,14 @@ class TestShieldVolatilityFix:
 
         # 49 steps after close: no bonus
         ctx = {"pnl_pct": 0.0, "drawdown": 0.04, "has_position": False,
-               "step": 99, "funding_cost": 0.0, "current_price": 100.0}
+               "step": 99, "funding_cost": 0.0, "current_price": 100.0,
+               "unrealized_pnl_pct": 0.0}
         reward_expired = env._calculate_reward(ctx)
 
         # 1 step after close: has bonus
         ctx2 = {"pnl_pct": 0.0, "drawdown": 0.04, "has_position": False,
-                "step": 51, "funding_cost": 0.0, "current_price": 100.0}
+                "step": 51, "funding_cost": 0.0, "current_price": 100.0,
+                "unrealized_pnl_pct": 0.0}
         reward_active = env._calculate_reward(ctx2)
 
         assert reward_active > reward_expired

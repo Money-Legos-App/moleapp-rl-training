@@ -192,6 +192,10 @@ class BaseTradingEnv(gym.Env):
         )
         drawdown = max(0.0, drawdown)
 
+        # Dense reward: unrealized PnL breadcrumb every step while holding
+        # Gives the Critic network a signal to follow, not just at trade close
+        unrealized_pnl_pct = self._unrealized_pnl(current_idx) / max(prev_value, 1.0)
+
         reward_context = {
             "pnl_pct": pnl_pct,
             "drawdown": drawdown,
@@ -200,6 +204,7 @@ class BaseTradingEnv(gym.Env):
             "step": self.state.step,
             "funding_cost": self.state.total_funding_paid,
             "current_price": self._get_price(current_idx),
+            "unrealized_pnl_pct": unrealized_pnl_pct,
         }
         reward = self._calculate_reward(reward_context)
 

@@ -52,6 +52,7 @@ class ShieldTradingEnv(BaseTradingEnv):
         drawdown = ctx["drawdown"]
         has_position = ctx["has_position"]
         step = ctx["step"]
+        unrealized = ctx.get("unrealized_pnl_pct", 0.0)
 
         reward = 0.0
 
@@ -60,6 +61,11 @@ class ShieldTradingEnv(BaseTradingEnv):
             reward += pnl * 3.0  # Losses hurt 3x
         else:
             reward += pnl
+
+        # --- Dense unrealized PnL signal (breadcrumbs for the Critic) ---
+        # Small reward/penalty every step while holding, proportional to unrealized P&L
+        if has_position:
+            reward += unrealized * 0.5  # Half-weight vs realized — don't overweight paper gains
 
         # --- Drawdown penalty (escalating — episode terminates at 10% via base env) ---
         if drawdown > 0.05:
@@ -73,25 +79,22 @@ class ShieldTradingEnv(BaseTradingEnv):
         self._had_position = has_position
 
         # --- Volatility avoidance (decay-based, not unconditional) ---
-        # Only rewards ACTIVELY avoiding volatility after closing a position.
-        # Never-trade agent gets zero bonus. Max per close ≈ 0.48.
         if not has_position and self._last_close_step > 0:
             steps_since_close = step - self._last_close_step
-            if 0 < steps_since_close <= 48 and drawdown > 0.03:  # 48 steps = 12h
+            if 0 < steps_since_close <= 48 and drawdown > 0.03:
                 decay = max(0.0, 1.0 - steps_since_close / 48.0)
                 reward += 0.02 * decay
 
         # --- Funding bleed penalty: ALWAYS block (Shield NEVER pays funding) ---
-        # Heavy 10x multiplier vs old 0.001 — any funding payment is strongly penalized
         reward -= abs(ctx.get("funding_cost", 0)) * 0.01
 
         # --- Anti-trivial-solution: time penalty when flat ---
         if not has_position:
-            reward -= 0.00001  # Tiny penalty per step when not trading
+            reward -= 0.001  # Stronger penalty — force the agent to trade
 
         # --- Safe trade bonus ---
-        # Reward profitable trades that had low drawdown
         if pnl > 0.01 and drawdown < 0.005:
-            reward += 0.01  # Bonus for clean, safe wins
+            reward += 0.01
 
-        return reward
+        # --- Scale ×100: prevent vanishing gradients from micro-PnL rewards ---
+        return reward * 100.0

@@ -47,6 +47,7 @@ class BuilderTradingEnv(BaseTradingEnv):
         pnl = ctx["pnl_pct"]
         drawdown = ctx["drawdown"]
         has_position = ctx["has_position"]
+        unrealized = ctx.get("unrealized_pnl_pct", 0.0)
 
         reward = 0.0
 
@@ -55,6 +56,10 @@ class BuilderTradingEnv(BaseTradingEnv):
             reward += pnl * 1.5
         else:
             reward += pnl
+
+        # --- Dense unrealized PnL signal (breadcrumbs for the Critic) ---
+        if has_position:
+            reward += unrealized * 0.3  # Lighter weight than Shield — Builder holds longer
 
         # --- Trend-following bonus ---
         # Reward consecutive profitable steps (riding a trend)
@@ -69,16 +74,16 @@ class BuilderTradingEnv(BaseTradingEnv):
             reward -= (drawdown - 0.10) * 2.0  # Gentle ramp from 10-15%
 
         # --- Funding bleed: only penalize above 0.03% threshold ---
-        # Normal funding is tolerated; only extreme spikes are penalized
         funding_cost = abs(ctx.get("funding_cost", 0))
         if funding_cost > FUNDING_PENALTY_THRESHOLD:
             reward -= (funding_cost - FUNDING_PENALTY_THRESHOLD) * 0.005
 
-        # --- Small time penalty to encourage activity ---
+        # --- Stronger time penalty to encourage activity ---
         if not has_position:
-            reward -= 0.000005
+            reward -= 0.0005
 
-        return reward
+        # --- Scale ×100: prevent vanishing gradients from micro-PnL rewards ---
+        return reward * 100.0
 
     def reset(self, **kwargs):
         self._prev_pnl = 0.0
