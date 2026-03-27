@@ -8,7 +8,7 @@ Gymnasium environment simulating HL perp trading with realistic constraints:
 - Leverage caps per risk profile
 - Liquidation simulation
 
-Subclassed by ShieldTradingEnv, BuilderTradingEnv, HunterTradingEnv
+Subclassed by ShieldTradingEnv and BuilderTradingEnv
 which only override `_calculate_reward()`.
 """
 
@@ -99,6 +99,7 @@ class BaseTradingEnv(gym.Env):
         min_tp_pct: float = 0.02,
         episode_length: int = 2880,  # 30 days of 15-min steps
         max_drawdown_pct: float = 1.0,  # Drawdown kill: 0.10=10%. 1.0=disabled (base default)
+        max_position_size_pct: float = 1.0,  # Max single position as % of portfolio (Shield=0.25, Builder=0.50)
         profile_name: str = "base",
     ):
         super().__init__()
@@ -114,6 +115,7 @@ class BaseTradingEnv(gym.Env):
         self.min_tp_pct = min_tp_pct
         self.episode_length = min(episode_length, len(market_data))
         self.max_drawdown_pct = max_drawdown_pct
+        self.max_position_size_pct = max_position_size_pct
         self.profile_name = profile_name
 
         # Spaces
@@ -198,7 +200,7 @@ class BaseTradingEnv(gym.Env):
             reward -= 10.0  # Universal heavy penalty for blowup
 
         # Drawdown kill — matches production risk_manager.py kill switch
-        # Shield=10%, Builder=20%, Hunter=30%. Episode ENDS, not just penalty.
+        # Shield=10%, Builder=20%. Episode ENDS, not just penalty.
         if drawdown >= self.max_drawdown_pct:
             terminated = True
             reward -= 5.0  # Heavy but less than blowup (agent should learn to avoid)
@@ -324,9 +326,10 @@ class BaseTradingEnv(gym.Env):
         confidence = (float(action[4]) + 1.0) / 2.0  # [-1,1] → [0,1]
         confidence = np.clip(confidence, 0.05, 1.0)   # Floor 5% — prevents zero-position exploit
 
-        # Calculate position size in USD (scaled by confidence)
+        # Calculate position size in USD (scaled by confidence, capped by max_position_size_pct)
         available_margin = self.state.account_value * (1.0 - self._margin_utilization())
-        position_usd = available_margin * size_frac * leverage * confidence
+        max_position = self.state.account_value * self.max_position_size_pct
+        position_usd = min(available_margin * size_frac * leverage * confidence, max_position * leverage)
 
         # Minimum notional check
         if position_usd < MIN_NOTIONAL_USD:

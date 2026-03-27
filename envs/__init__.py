@@ -1,7 +1,6 @@
 from envs.base_trading_env import BaseTradingEnv
 from envs.shield_env import ShieldTradingEnv
 from envs.builder_env import BuilderTradingEnv
-from envs.hunter_env import HunterTradingEnv
 
 from gymnasium.wrappers import NormalizeObservation
 from ray.tune.registry import register_env
@@ -16,18 +15,15 @@ def _make_env(env_cls, cfg):
 # RLlib env registration — wrapped with observation normalization
 register_env("ShieldTradingEnv", lambda cfg: _make_env(ShieldTradingEnv, cfg))
 register_env("BuilderTradingEnv", lambda cfg: _make_env(BuilderTradingEnv, cfg))
-register_env("HunterTradingEnv", lambda cfg: _make_env(HunterTradingEnv, cfg))
 
 ENV_MAP = {
     "shield": "ShieldTradingEnv",
     "builder": "BuilderTradingEnv",
-    "hunter": "HunterTradingEnv",
 }
 
 __all__ = [
     "BaseTradingEnv",
     "ShieldTradingEnv",
     "BuilderTradingEnv",
-    "HunterTradingEnv",
     "ENV_MAP",
 ]

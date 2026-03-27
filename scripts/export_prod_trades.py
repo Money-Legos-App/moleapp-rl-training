@@ -150,14 +150,14 @@ def compute_reward_calibration(df: pd.DataFrame) -> dict:
     """
     Compute reward calibration targets from real trade data.
 
-    These values inform reward shaping in Shield/Builder/Hunter envs:
+    These values inform reward shaping in Shield/Builder envs:
     - What PnL % distribution does each profile achieve?
     - What drawdown levels are acceptable?
     - How often does each profile trade?
     """
     calibration = {}
 
-    for profile in ["CONSERVATIVE", "MODERATE", "AGGRESSIVE"]:
+    for profile in ["CONSERVATIVE", "MODERATE"]:
         profile_df = df[df["risk_level"] == profile]
         if profile_df.empty:
             continue

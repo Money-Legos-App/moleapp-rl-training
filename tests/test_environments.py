@@ -25,7 +25,6 @@ from envs.base_trading_env import (
 )
 from envs.shield_env import ShieldTradingEnv
 from envs.builder_env import BuilderTradingEnv
-from envs.hunter_env import HunterTradingEnv
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -138,7 +137,7 @@ def _make_env(env_class, **kwargs):
 class TestRandomPolicyLosesMoney:
     """A random agent should lose money due to fees and funding."""
 
-    @pytest.mark.parametrize("env_class", [ShieldTradingEnv, BuilderTradingEnv, HunterTradingEnv])
+    @pytest.mark.parametrize("env_class", [ShieldTradingEnv, BuilderTradingEnv])
     def test_random_agent_pays_significant_fees(self, env_class):
         """Random actions should accumulate significant fees (proving env realism)."""
         market_data, features = _make_synthetic_data(n_steps=2000)
@@ -424,7 +423,7 @@ class TestLiquidation:
                 cross_asset_momentum=-0.5,
             ))
 
-        env = HunterTradingEnv(
+        env = BuilderTradingEnv(
             market_data=market_data,
             feature_data=features,
             episode_length=200,
@@ -502,7 +501,7 @@ class TestFeeAccounting:
 class TestObservationShape:
     """Verify observation vector dimensions and basic sanity."""
 
-    @pytest.mark.parametrize("env_class", [ShieldTradingEnv, BuilderTradingEnv, HunterTradingEnv])
+    @pytest.mark.parametrize("env_class", [ShieldTradingEnv, BuilderTradingEnv])
     def test_obs_dim(self, env_class):
         market_data, features = _make_synthetic_data(n_steps=500)
         env = env_class(
@@ -589,13 +588,6 @@ class TestProfileConstraints:
         assert env.max_sl_pct == 0.05
         assert env.max_tp_pct == 0.10
 
-    def test_hunter_limits(self):
-        market_data, features = _make_synthetic_data(n_steps=200)
-        env = HunterTradingEnv(market_data=market_data, feature_data=features)
-        assert env.max_leverage == 3
-        assert env.max_sl_pct == 0.07
-        assert env.max_tp_pct == 0.15
-
 
 # ──────────────────────────────────────────────────────────────────────
 # Test 10: Gymnasium API compliance
@@ -604,7 +596,7 @@ class TestProfileConstraints:
 class TestGymnasiumAPI:
     """Verify envs follow Gymnasium API contract."""
 
-    @pytest.mark.parametrize("env_class", [ShieldTradingEnv, BuilderTradingEnv, HunterTradingEnv])
+    @pytest.mark.parametrize("env_class", [ShieldTradingEnv, BuilderTradingEnv])
     def test_reset_returns_obs_info(self, env_class):
         market_data, features = _make_synthetic_data(n_steps=500)
         env = env_class(market_data=market_data, feature_data=features, episode_length=100)
@@ -614,7 +606,7 @@ class TestGymnasiumAPI:
         assert obs.shape == (OBS_DIM,)
         assert isinstance(info, dict)
 
-    @pytest.mark.parametrize("env_class", [ShieldTradingEnv, BuilderTradingEnv, HunterTradingEnv])
+    @pytest.mark.parametrize("env_class", [ShieldTradingEnv, BuilderTradingEnv])
     def test_step_returns_5tuple(self, env_class):
         market_data, features = _make_synthetic_data(n_steps=500)
         env = env_class(market_data=market_data, feature_data=features, episode_length=100)
@@ -629,7 +621,7 @@ class TestGymnasiumAPI:
         assert isinstance(truncated, bool)
         assert isinstance(info, dict)
 
-    @pytest.mark.parametrize("env_class", [ShieldTradingEnv, BuilderTradingEnv, HunterTradingEnv])
+    @pytest.mark.parametrize("env_class", [ShieldTradingEnv, BuilderTradingEnv])
     def test_episode_terminates(self, env_class):
         """Episode should end within episode_length steps."""
         market_data, features = _make_synthetic_data(n_steps=500)

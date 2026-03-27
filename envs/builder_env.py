@@ -1,31 +1,43 @@
 """
-Builder Trading Environment (MODERATE Risk Profile)
-=====================================================
-Goal: Steady growth with controlled volatility. Capture trends.
+Builder Trading Environment (MODERATE Risk Profile) — "High-Yield Engine"
+===========================================================================
+Goal: Targeted growth with controlled risk. Wealth generation for risk-tolerant users.
+
+Risk Matrix:
+- Max Leverage: 2x (maximized capital efficiency)
+- Max Position Size: 50% of portfolio
+- Max Stop Loss: 5%
+- Min R/R Ratio: 1.8x
+- Min LLM Confidence: 0.60
+- Funding Block: > 0.03% (block only extreme funding spikes)
 
 Reward shaping:
 - 1.5x asymmetric loss penalty
 - Drawdown penalty kicks in above 15%
 - Trend-following bonus (reward for riding sustained moves)
-- Moderate funding bleed awareness
+- Funding penalty only above 0.03% threshold (tolerate normal funding)
 """
 
 from __future__ import annotations
 
 from envs.base_trading_env import BaseTradingEnv
 
+# Funding threshold: only penalize above 0.03% per 8h (0.0003)
+FUNDING_PENALTY_THRESHOLD = 0.0003
+
 
 class BuilderTradingEnv(BaseTradingEnv):
-    """Moderate RL environment — The Builder."""
+    """Moderate RL environment — The Builder (High-Yield Engine)."""
 
     def __init__(self, **kwargs):
         kwargs.setdefault("max_leverage", 2)
         kwargs.setdefault("max_positions", 4)
-        kwargs.setdefault("max_sl_pct", 0.05)
+        kwargs.setdefault("max_sl_pct", 0.05)    # 5% max stop loss
         kwargs.setdefault("min_sl_pct", 0.01)
         kwargs.setdefault("max_tp_pct", 0.10)
-        kwargs.setdefault("min_tp_pct", 0.02)
+        kwargs.setdefault("min_tp_pct", 0.018)   # Min R/R 1.8x → TP ≥ 1.8 * SL
         kwargs.setdefault("max_drawdown_pct", 0.20)  # 20% kill — matches risk_manager.py
+        kwargs.setdefault("max_position_size_pct", 0.50)  # 50% of portfolio max
         kwargs.setdefault("profile_name", "builder")
         super().__init__(**kwargs)
 
@@ -56,8 +68,11 @@ class BuilderTradingEnv(BaseTradingEnv):
         elif drawdown > 0.10:
             reward -= (drawdown - 0.10) * 2.0  # Gentle ramp from 10-15%
 
-        # --- Funding bleed (moderate awareness) ---
-        reward -= abs(ctx.get("funding_cost", 0)) * 0.0005
+        # --- Funding bleed: only penalize above 0.03% threshold ---
+        # Normal funding is tolerated; only extreme spikes are penalized
+        funding_cost = abs(ctx.get("funding_cost", 0))
+        if funding_cost > FUNDING_PENALTY_THRESHOLD:
+            reward -= (funding_cost - FUNDING_PENALTY_THRESHOLD) * 0.005
 
         # --- Small time penalty to encourage activity ---
         if not has_position:

@@ -1,13 +1,21 @@
 """
-Shield Trading Environment (CONSERVATIVE Risk Profile)
-========================================================
-Goal: Capital preservation. Small, consistent wins. Avoid volatility.
+Shield Trading Environment (CONSERVATIVE Risk Profile) — "Flexible USD Vault"
+================================================================================
+Goal: Capital preservation. Inflation protection with zero liquidation risk.
+
+Risk Matrix:
+- Max Leverage: 1x (spot equivalent, no liquidation)
+- Max Position Size: 25% of portfolio
+- Max Stop Loss: 3%
+- Min R/R Ratio: 2.5x
+- Min LLM Confidence: 0.70
+- Funding Block: Always (never pay funding)
 
 Reward shaping:
 - 3x asymmetric loss penalty (losses hurt 3x more than gains help)
 - Heavy drawdown penalty (kill at 10%)
 - Bonus for staying flat during high-volatility periods
-- Funding bleed penalty
+- HEAVY funding bleed penalty (Shield NEVER pays funding)
 - Time penalty when flat (prevents "never trade" trivial solution)
 - Bonus for profitable low-risk trades (incentivizes safe arbitrage)
 """
@@ -18,16 +26,17 @@ from envs.base_trading_env import BaseTradingEnv
 
 
 class ShieldTradingEnv(BaseTradingEnv):
-    """Conservative RL environment — The Shield."""
+    """Conservative RL environment — The Shield (Flexible USD Vault)."""
 
     def __init__(self, **kwargs):
         kwargs.setdefault("max_leverage", 1)
         kwargs.setdefault("max_positions", 2)
-        kwargs.setdefault("max_sl_pct", 0.03)
+        kwargs.setdefault("max_sl_pct", 0.03)    # 3% max stop loss
         kwargs.setdefault("min_sl_pct", 0.005)
-        kwargs.setdefault("max_tp_pct", 0.06)
-        kwargs.setdefault("min_tp_pct", 0.01)
+        kwargs.setdefault("max_tp_pct", 0.075)   # Min R/R 2.5x → TP ≥ 2.5 * SL
+        kwargs.setdefault("min_tp_pct", 0.0125)  # 2.5x * 0.5% min SL
         kwargs.setdefault("max_drawdown_pct", 0.10)  # 10% kill — matches risk_manager.py
+        kwargs.setdefault("max_position_size_pct", 0.25)  # 25% of portfolio max
         kwargs.setdefault("profile_name", "shield")
         super().__init__(**kwargs)
         self._last_close_step = 0
@@ -72,8 +81,9 @@ class ShieldTradingEnv(BaseTradingEnv):
                 decay = max(0.0, 1.0 - steps_since_close / 48.0)
                 reward += 0.02 * decay
 
-        # --- Funding bleed penalty ---
-        reward -= abs(ctx.get("funding_cost", 0)) * 0.001
+        # --- Funding bleed penalty: ALWAYS block (Shield NEVER pays funding) ---
+        # Heavy 10x multiplier vs old 0.001 — any funding payment is strongly penalized
+        reward -= abs(ctx.get("funding_cost", 0)) * 0.01
 
         # --- Anti-trivial-solution: time penalty when flat ---
         if not has_position:

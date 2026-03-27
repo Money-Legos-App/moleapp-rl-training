@@ -1,12 +1,15 @@
 """
-Unified Training Script for Shield, Builder, and Hunter Models (RLlib)
-=======================================================================
+Unified Training Script for Shield and Builder Models (RLlib)
+==============================================================
 Uses the new API stack (RLModule + Learner + ConnectorV2 + EnvRunner).
+
+2-Strategy System:
+  Shield  — "Flexible USD Vault" (1x leverage, 25% max position, never pay funding)
+  Builder — "High-Yield Engine"  (2x leverage, 50% max position, block funding >0.03%)
 
 Usage:
     python -m training.train --profile shield --config training/configs/shield_config.yaml
     python -m training.train --profile builder --config training/configs/builder_config.yaml
-    python -m training.train --profile hunter --config training/configs/hunter_config.yaml
 """
 
 from __future__ import annotations
@@ -172,7 +175,7 @@ def train(
     Train a PPO model for the specified risk profile using RLlib.
 
     Args:
-        profile: "shield", "builder", or "hunter"
+        profile: "shield" or "builder"
         config_path: Path to YAML config file
         data_dir: Directory containing .parquet market data files
         episode_dir: Directory with cached EpisodeBuilder output
@@ -383,7 +386,7 @@ def main():
     parser.add_argument(
         "--profile",
         required=True,
-        choices=["shield", "builder", "hunter"],
+        choices=["shield", "builder"],
         help="Risk profile to train",
     )
     parser.add_argument(

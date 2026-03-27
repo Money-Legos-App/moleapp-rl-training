@@ -1,6 +1,10 @@
 # RunPod Training Guide — MoleApp Alpha RL Agents
 
-Step-by-step guide to provision a RunPod GPU instance, clone the repo, and train Shield / Builder / Hunter models on all 15 assets.
+Step-by-step guide to provision a RunPod GPU instance, clone the repo, and train Shield / Builder models on all 15 assets.
+
+**2-Strategy System:**
+- **Shield** — "Flexible USD Vault" (1x leverage, 25% max position, never pay funding)
+- **Builder** — "High-Yield Engine" (2x leverage, 50% max position, block funding >0.03%)
 
 ---
 
@@ -152,10 +156,11 @@ Expected output at the end:
 GPU:
   NVIDIA GeForce RTX 4090, 24564 MiB, 24322 MiB
 
+2-Strategy System: Shield (Flexible USD Vault) + Builder (High-Yield Engine)
+
 Training commands (GPU auto-detected, all 15 assets by default):
   Shield:  python -m training.train --profile shield  --config training/configs/shield_config.yaml
   Builder: python -m training.train --profile builder --config training/configs/builder_config.yaml
-  Hunter:  python -m training.train --profile hunter  --config training/configs/hunter_config.yaml
 ```
 
 ---
@@ -190,15 +195,14 @@ nohup python -m training.train --profile shield --config training/configs/shield
 tail -f logs/shield.log
 ```
 
-### Train all three profiles sequentially
+### Train both profiles sequentially
 
 ```bash
 tmux new -s training
 
-# Shield → Builder → Hunter
+# Shield → Builder
 python -m training.train --profile shield  --config training/configs/shield_config.yaml && \
-python -m training.train --profile builder --config training/configs/builder_config.yaml && \
-python -m training.train --profile hunter  --config training/configs/hunter_config.yaml
+python -m training.train --profile builder --config training/configs/builder_config.yaml
 
 # Detach: Ctrl+B then D
 ```
@@ -231,16 +235,16 @@ Training logs to **W&B project: `moleapp-rl`**. Go to [wandb.ai](https://wandb.a
 
 Key metrics to watch:
 
-| Metric | Shield Target | Builder Target | Hunter Target |
-|---|---|---|---|
-| `train/episode_reward_mean` | Trending up | Trending up | Trending up |
-| `train/total_return` | > 0% | > 0% | > 50% |
-| `train/max_drawdown` | < 10% | < 25% | < 35% |
-| `train/win_rate` | > 60% | > 50% | > 45% |
-| `eval/episode_reward_mean` | Stable, not diverging from train | Same | Same |
+| Metric | Shield Target | Builder Target |
+|---|---|---|
+| `train/episode_reward_mean` | Trending up | Trending up |
+| `train/total_return` | > 0% | > 0% |
+| `train/max_drawdown` | < 10% | < 25% |
+| `train/win_rate` | > 60% | > 50% |
+| `eval/episode_reward_mean` | Stable, not diverging from train | Same |
 
 **Warning signs:**
-- `train/max_drawdown` stuck at the kill threshold (10% / 20% / 30%) = agent triggers drawdown kill every episode
+- `train/max_drawdown` stuck at the kill threshold (10% / 20%) = agent triggers drawdown kill every episode
 - `train/episode_reward_mean` flat after 2M steps = learning stalled, consider HP sweep
 - `eval` diverging from `train` = overfitting
 
@@ -289,24 +293,23 @@ print('Parity check:', 'PASSED' if ok else 'FAILED')
 "
 ```
 
-Repeat for Builder and Hunter:
+Repeat for Builder:
 
 ```bash
 python -c "
 from serving.model_registry import export_to_onnx, verify_onnx_parity
 
-for profile in ['builder', 'hunter']:
-    artifacts = export_to_onnx(
-        checkpoint_path=f'models/{profile}/{profile}_final',
-        output_dir='models/onnx',
-        profile=profile,
-        version='1.0.0',
-    )
-    ok = verify_onnx_parity(
-        checkpoint_path=f'models/{profile}/{profile}_final',
-        onnx_path=f'models/onnx/{profile}-v1.0.0.onnx',
-    )
-    print(f'{profile}: exported={list(artifacts.keys())}, parity={\"PASS\" if ok else \"FAIL\"}')
+artifacts = export_to_onnx(
+    checkpoint_path='models/builder/builder_final',
+    output_dir='models/onnx',
+    profile='builder',
+    version='1.0.0',
+)
+ok = verify_onnx_parity(
+    checkpoint_path='models/builder/builder_final',
+    onnx_path='models/onnx/builder-v1.0.0.onnx',
+)
+print(f'builder: exported={list(artifacts.keys())}, parity={\"PASS\" if ok else \"FAIL\"}')
 "
 ```
 
@@ -320,9 +323,6 @@ models/onnx/
   builder-v1.0.0.onnx
   builder-v1.0.0.vecnorm.pkl
   builder-v1.0.0.meta.pkl
-  hunter-v1.0.0.onnx
-  hunter-v1.0.0.vecnorm.pkl
-  hunter-v1.0.0.meta.pkl
 ```
 
 ---
@@ -347,15 +347,15 @@ The agent-service on Render will pull from `s3://moleapp-rl-data/models/`.
 
 ### Estimated training costs (all 15 assets, 10M timesteps per profile)
 
-| GPU | Per Profile | All 3 Profiles | Notes |
+| GPU | Per Profile | Both Profiles | Notes |
 |---|---|---|---|
-| RTX 4090 | ~$8-12 | ~$25-35 | Best price/performance |
-| A100 40GB | ~$17-22 | ~$50-65 | Fastest wall-clock time |
-| RTX 3090 | ~$7-9 | ~$20-27 | Budget, slightly slower |
+| RTX 4090 | ~$8-12 | ~$16-24 | Best price/performance |
+| A100 40GB | ~$17-22 | ~$34-44 | Fastest wall-clock time |
+| RTX 3090 | ~$7-9 | ~$14-18 | Budget, slightly slower |
 
 ### Tips to save money
 
-1. **Start with Shield only** on RTX 4090 — validate the pipeline works before training all 3
+1. **Start with Shield only** on RTX 4090 — validate the pipeline works before training both
 2. **Use spot instances** if available — up to 50% cheaper, but can be preempted (use `--resume` to continue)
 3. **Stop the pod** between training runs — volume persists, you only pay for compute when running
 4. **Quick validation first**: Run with `--assets BTC` and reduced timesteps to validate setup before the full run
@@ -472,14 +472,13 @@ bash runpod/setup.sh
 # 3. Train (in tmux)
 tmux new -s train
 python -m training.train --profile shield  --config training/configs/shield_config.yaml && \
-python -m training.train --profile builder --config training/configs/builder_config.yaml && \
-python -m training.train --profile hunter  --config training/configs/hunter_config.yaml
+python -m training.train --profile builder --config training/configs/builder_config.yaml
 # Ctrl+B, D to detach
 
 # 4. Export ONNX (after training)
 python -c "
 from serving.model_registry import export_to_onnx
-for p in ['shield', 'builder', 'hunter']:
+for p in ['shield', 'builder']:
     export_to_onnx(f'models/{p}/{p}_final', 'models/onnx', p, '1.0.0')
 "
 

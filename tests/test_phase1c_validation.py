@@ -44,7 +44,6 @@ from envs.base_trading_env import (
     TAKER_FEE_PCT,
 )
 from envs.builder_env import BuilderTradingEnv
-from envs.hunter_env import HunterTradingEnv
 from envs.shield_env import ShieldTradingEnv
 
 
@@ -288,7 +287,6 @@ class TestRandomPolicyBleed:
         [
             (ShieldTradingEnv, "Shield"),
             (BuilderTradingEnv, "Builder"),
-            (HunterTradingEnv, "Hunter"),
         ],
     )
     def test_random_agent_loses_money(self, env_class, label):
@@ -310,7 +308,6 @@ class TestRandomPolicyBleed:
         [
             (ShieldTradingEnv, "Shield"),
             (BuilderTradingEnv, "Builder"),
-            (HunterTradingEnv, "Hunter"),
         ],
     )
     def test_random_agent_pays_meaningful_fees(self, env_class, label):
@@ -334,7 +331,7 @@ class TestRandomPolicyBleed:
         """No single seed should let random agent profit across all 3 profiles."""
         for seed in [42, 123, 999]:
             profits = 0
-            for env_class in [ShieldTradingEnv, BuilderTradingEnv, HunterTradingEnv]:
+            for env_class in [ShieldTradingEnv, BuilderTradingEnv]:
                 results = self._run_random_episodes(env_class, seed=seed)
                 if np.mean(results["final_values"]) > 1000.0:
                     profits += 1
@@ -707,7 +704,7 @@ class TestLiquidationTermination:
             n_steps=200, crash_start_step=5, crash_pct_per_step=0.03,  # 3% per step = brutal
         )
 
-        env = HunterTradingEnv(
+        env = BuilderTradingEnv(
             market_data=market_data,
             feature_data=features,
             episode_length=150,
@@ -749,15 +746,20 @@ class TestLiquidationTermination:
             n_steps=200, crash_start_step=3, crash_pct_per_step=0.02,
         )
 
-        env = HunterTradingEnv(
+        env = BaseTradingEnv(
             market_data=market_data,
             feature_data=features,
             episode_length=100,
             initial_capital=1000.0,
+            max_leverage=3,
+            max_sl_pct=0.50,  # Wide SL so liquidation triggers first
+            min_sl_pct=0.50,
+            max_tp_pct=0.50,
+            min_tp_pct=0.50,
         )
         obs, _ = env.reset(seed=0)
 
-        # Open position at step 1
+        # Open a 3x leveraged long
         action = np.array([1.0, 1.0, 0.0, 0.0, 1.0], dtype=np.float32)
         env.step(action)
 

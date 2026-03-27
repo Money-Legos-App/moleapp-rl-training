@@ -53,7 +53,7 @@ def export_to_onnx(
     Args:
         checkpoint_path: Path to RLlib checkpoint directory
         output_dir: Directory for ONNX artifacts
-        profile: "shield", "builder", or "hunter"
+        profile: "shield" or "builder"
         version: Semantic version string
         norm_stats_path: Path to norm_stats.pkl (from _save_norm_stats)
 
