@@ -175,8 +175,8 @@ def build_sweep_config(
         )
         .callbacks(callbacks_class=TradingCallbacks)
         .learners(
-            num_learners=1,
-            num_gpus_per_learner=1,
+            num_learners=0,             # Local mode — train in PPO process directly
+            num_gpus_per_learner=1,     # Give that process the GPU
         )
     )
 
@@ -220,7 +220,7 @@ def run_sweep(
     )
 
     tuner = tune.Tuner(
-        "PPO",
+        tune.with_resources("PPO", resources={"cpu": 5, "gpu": 1}),
         param_space=ppo_config,
         tune_config=tune.TuneConfig(
             metric=search["metric"],
