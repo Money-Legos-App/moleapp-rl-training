@@ -39,7 +39,7 @@ from training.train import _load_training_data
 logger = logging.getLogger(__name__)
 
 # ── Sweep budget ────────────────────────────────────────────────────
-SWEEP_TOTAL_TIMESTEPS = 1_000_000   # 1M is enough to see signal (LR warmup at 100K)
+SWEEP_TOTAL_TIMESTEPS = 500_000     # 500K — enough to rank configs (full train is 10M)
 EVAL_INTERVAL = 20
 
 # ── Environment params per profile ──────────────────────────────────
@@ -81,8 +81,8 @@ PROFILE_SEARCH = {
         "epoch_choices": [4, 6],                         # Fewer — avoid overfitting
         "batch_choices": [16384],                        # Large — stable updates
         "metric": "env_runners/risk_adjusted_return",    # Return / drawdown
-        "num_samples": 12,                               # 12 trials — ASHA kills ~half
-        "grace_period": 300_000,                         # 300K grace — 1M budget means 30% floor
+        "num_samples": 6,                                # 6 trials — ASHA kills ~half
+        "grace_period": 150_000,                         # 150K grace — 30% of 500K budget
     },
     "builder": {
         "peak_lrs": [1e-4, 3e-4, 5e-4, 1e-3],         # Wider LR range — can be aggressive
@@ -93,8 +93,8 @@ PROFILE_SEARCH = {
         "epoch_choices": [4, 6, 8],                       # More passes OK with higher entropy
         "batch_choices": [8192, 16384],                   # Both sizes
         "metric": "env_runners/episode_return_mean",      # Pure return maximization
-        "num_samples": 12,
-        "grace_period": 300_000,
+        "num_samples": 6,
+        "grace_period": 150_000,
     },
 }
 
@@ -103,20 +103,20 @@ SHIELD_ENV_KWARGS = PROFILE_ENV_KWARGS["shield"]
 
 
 def _make_lr_schedule(peak_lr: float) -> list:
-    """Build V3-style warmup+decay LR schedule from a peak LR value."""
+    """Build warmup+decay LR schedule scaled to 500K sweep budget."""
     return [
         [0, peak_lr / 30],              # Start at 1/30 of peak
-        [100_000, peak_lr],              # Ramp to peak by 100K
-        [1_600_000, peak_lr / 10],       # Decay to 10% by 80% of sweep budget
+        [50_000, peak_lr],              # Ramp to peak by 50K (10% of budget)
+        [400_000, peak_lr / 10],        # Decay to 10% by 80% of budget
     ]
 
 
 def _make_entropy_schedule(start_entropy: float) -> list:
-    """Build V3-style entropy annealing schedule from start value."""
+    """Build entropy annealing schedule scaled to 500K sweep budget."""
     return [
         [0, start_entropy],
-        [1_000_000, start_entropy / 5],     # 5x reduction by midpoint
-        [2_000_000, 0.0001],                # Near-zero at end
+        [250_000, start_entropy / 5],     # 5x reduction by midpoint
+        [500_000, 0.0001],                # Near-zero at end
     ]
 
 
