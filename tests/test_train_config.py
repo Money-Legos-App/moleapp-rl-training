@@ -133,6 +133,16 @@ class TestYAMLConfigParsing:
         """Both strategies should use the same entropy schedule."""
         assert shield_config["entropy_coeff_schedule"] == builder_config["entropy_coeff_schedule"]
 
+    def test_entropy_starts_at_005(self, shield_config):
+        """V3: lower starting entropy (0.005 vs V2's 0.01)."""
+        schedule = shield_config["entropy_coeff_schedule"]
+        assert schedule[0][1] == 0.005
+
+    def test_entropy_ends_at_00001(self, shield_config):
+        """V3: near-zero entropy at end — exploit, don't explore."""
+        schedule = shield_config["entropy_coeff_schedule"]
+        assert schedule[-1][1] == 0.0001
+
     # --- LR Schedule ---
 
     def test_shield_has_lr_schedule(self, shield_config):
@@ -260,10 +270,13 @@ class TestBuildPPOConfig:
 # Test: Reward Normalization Wrapper
 # ──────────────────────────────────────────────────────────────────────
 
-class TestRewardNormalization:
-    def test_env_has_normalize_reward_wrapper(self):
-        """_make_env should wrap env with NormalizeReward."""
-        from gymnasium.wrappers import NormalizeReward
+class TestEnvWrappers:
+    def test_env_has_normalize_observation_but_not_reward(self):
+        """_make_env wraps with NormalizeObservation only — no NormalizeReward.
+
+        NormalizeReward with high gamma + long episodes undoes ×100 reward scaling.
+        """
+        from gymnasium.wrappers import NormalizeObservation
         from envs import _make_env
         from envs.shield_env import ShieldTradingEnv
         from tests.test_environments import _make_synthetic_data
@@ -283,7 +296,28 @@ class TestRewardNormalization:
             "max_drawdown_pct": 0.10,
         }
         env = _make_env(ShieldTradingEnv, cfg)
-        # NormalizeReward should be the outermost wrapper
-        assert isinstance(env, NormalizeReward), (
-            f"Expected NormalizeReward wrapper, got {type(env).__name__}"
+        assert isinstance(env, NormalizeObservation)
+        # NormalizeReward should NOT be present
+        assert type(env).__name__ != "NormalizeReward"
+
+    def test_reward_magnitude_with_100x_scaling(self):
+        """Rewards should be in meaningful range (0.01-1.0) with ×100 scaling."""
+        import numpy as np
+        from envs.shield_env import ShieldTradingEnv
+        from tests.test_environments import _make_synthetic_data
+
+        market_data, features = _make_synthetic_data(n_steps=200, trend=0.001)
+        env = ShieldTradingEnv(
+            market_data=market_data, feature_data=features,
+            initial_capital=1000.0, episode_length=50,
         )
+        obs, _ = env.reset()
+        rewards = []
+        for _ in range(30):
+            action = np.array([0.5, 0.0, 0.0, 0.0, 0.5])
+            obs, reward, term, trunc, _ = env.step(action)
+            rewards.append(abs(reward))
+            if term or trunc:
+                break
+        max_reward = max(rewards)
+        assert max_reward > 0.001, f"Max reward {max_reward} is too small — ×100 scaling may not be working"

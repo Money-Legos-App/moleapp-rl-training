@@ -16,9 +16,10 @@ clip_param: 0.15                 # Tighter clipping — slow, methodical policy 
 num_epochs: 6                    # Fewer passes — larger batch compensates
 minibatch_size: 256              # Larger batches → better GPU utilization
 train_batch_size_per_learner: 16384 # Larger batch — 128 envs fill this fast
-entropy_coeff_schedule:          # Anneal exploration: high early, low late
-  - [0, 0.01]
-  - [10_000_000, 0.001]
+entropy_coeff_schedule:          # Anneal exploration: lower start, aggressive decay
+  - [0, 0.005]                   # Half of V2 — ×100 rewards are strong enough
+  - [5_000_000, 0.001]           # Halve by midpoint
+  - [10_000_000, 0.0001]         # Near-zero by end — exploit, don't explore
 vf_loss_coeff: 0.5
 grad_clip: 0.5
 
