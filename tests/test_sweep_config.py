@@ -58,6 +58,11 @@ class TestTuneSweepConfig:
         assert float(ec["min"]) >= 1e-4
         assert float(ec["max"]) <= 0.1
 
+    def test_clip_param_range(self):
+        cp = self.config["sweep"]["parameters"]["clip_param"]
+        assert cp["min"] >= 0.05
+        assert cp["max"] <= 0.5
+
     def test_minibatch_size_values(self):
         bs = self.config["sweep"]["parameters"]["minibatch_size"]
         assert "values" in bs

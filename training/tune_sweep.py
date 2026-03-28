@@ -85,9 +85,11 @@ def build_sweep_config(
         **SHIELD_ENV_KWARGS,
     }
 
-    # Swept params as Tune search spaces
-    peak_lr = tune.loguniform(5e-5, 1e-3)
-    start_entropy = tune.loguniform(0.002, 0.02)
+    # Pre-sample peak LR and start entropy as grid values,
+    # then build schedules from them in each trial.
+    # We sweep scalar values and convert to schedules at trial init.
+    peak_lrs = [5e-5, 1e-4, 2e-4, 3e-4, 5e-4, 1e-3]
+    start_entropies = [0.002, 0.005, 0.01, 0.02]
 
     config = (
         PPOConfig()
@@ -100,11 +102,9 @@ def build_sweep_config(
             num_envs_per_env_runner=2,
         )
         .training(
-            lr=tune.sample_from(lambda spec: _make_lr_schedule(spec.config.get("_peak_lr", 3e-4))),
+            lr=tune.choice([_make_lr_schedule(p) for p in peak_lrs]),
             gamma=tune.uniform(0.99, 0.999),
-            entropy_coeff=tune.sample_from(
-                lambda spec: _make_entropy_schedule(spec.config.get("_start_entropy", 0.005))
-            ),
+            entropy_coeff=tune.choice([_make_entropy_schedule(e) for e in start_entropies]),
             minibatch_size=tune.choice([128, 256, 512]),
             clip_param=tune.uniform(0.1, 0.25),
             # Fixed params
@@ -136,10 +136,6 @@ def build_sweep_config(
             num_gpus_per_learner=1,
         )
     )
-
-    # Inject hidden params that sample_from reads
-    config["_peak_lr"] = peak_lr
-    config["_start_entropy"] = start_entropy
 
     return config
 
@@ -228,9 +224,9 @@ def run_sweep(config_path: str | None = None, episode_dir: str = "data/episodes"
 
     logger.info("=" * 70)
     logger.info("SWEEP COMPLETE — Best Trial:")
-    logger.info(f"  Peak LR:       {best_config.get('_peak_lr', 'N/A')}")
+    logger.info(f"  LR Schedule:   {best_config.get('lr', 'N/A')}")
     logger.info(f"  Gamma:         {best_config.get('gamma', 'N/A')}")
-    logger.info(f"  Start Entropy: {best_config.get('_start_entropy', 'N/A')}")
+    logger.info(f"  Entropy Sched: {best_config.get('entropy_coeff', 'N/A')}")
     logger.info(f"  Clip Param:    {best_config.get('clip_param', 'N/A')}")
     logger.info(f"  Minibatch:     {best_config.get('minibatch_size', 'N/A')}")
     logger.info(f"  Num Epochs:    {best_config.get('num_epochs', 'N/A')}")
