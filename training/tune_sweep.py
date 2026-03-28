@@ -149,7 +149,7 @@ def build_sweep_config(
             env_config=train_env_config,
         )
         .env_runners(
-            num_env_runners=4,
+            num_env_runners=2,          # Reduced for sweep — save memory
             num_envs_per_env_runner=2,
         )
         .training(
@@ -171,16 +171,7 @@ def build_sweep_config(
             },
         )
         .evaluation(
-            evaluation_interval=EVAL_INTERVAL,
-            evaluation_duration=3,
-            evaluation_duration_unit="episodes",
-            evaluation_num_env_runners=1,
-            evaluation_sample_timeout_s=600,
-            evaluation_parallel_to_training=True,
-            evaluation_config=PPOConfig.overrides(
-                env_config=eval_env_config,
-                explore=False,
-            ),
+            evaluation_interval=None,   # Disable eval during sweep — saves GPU memory
         )
         .callbacks(callbacks_class=TradingCallbacks)
         .learners(
