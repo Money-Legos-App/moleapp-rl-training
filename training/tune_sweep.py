@@ -163,7 +163,9 @@ def build_sweep_config(
             train_batch_size_per_learner=tune.choice(search["batch_choices"]),
             vf_loss_coeff=0.5,
             grad_clip=0.5,
-            model={
+        )
+        .rl_module(
+            model_config={
                 "fcnet_hiddens": [256, 256, 128],
                 "fcnet_activation": "tanh",
             },
@@ -310,7 +312,9 @@ def run_dry_run(profile: str, episode_dir: str = "data/episodes", steps: int = 1
             train_batch_size_per_learner=min(steps, 2048),
             vf_loss_coeff=0.5,
             grad_clip=0.5,
-            model={
+        )
+        .rl_module(
+            model_config={
                 "fcnet_hiddens": [256, 256, 128],
                 "fcnet_activation": "tanh",
             },
