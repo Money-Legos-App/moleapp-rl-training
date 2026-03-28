@@ -1,5 +1,9 @@
-# Shield (CONSERVATIVE) PPO Training Configuration — RLlib
+# Shield (CONSERVATIVE) PPO Training Configuration — V4 (Sweep-Optimized)
 # Target: Sharpe > 1.0, Max Drawdown < 10%, Win Rate > 60%
+#
+# Hyperparameters from V4 sweep (trial c3048_00002):
+#   risk_adjusted_return: 5.13, drawdown: 5.8%, return: +6.6%
+#   Sweep: 6 trials, 750K steps, ASHA scheduler, metric=risk_adjusted_return
 
 algorithm: PPO
 env: ShieldTradingEnv
@@ -7,20 +11,20 @@ env: ShieldTradingEnv
 # Training loop
 total_timesteps: 10_000_000     # ~14h on RTX 4090 (8 runners), ~8h on A100
 
-# PPO Hyperparameters
-lr_schedule:                       # Warmup + decay — let VF learn before policy moves
-  - [0, 0.00001]                   # Start tiny — random actions, VF is garbage
-  - [100000, 0.0003]               # Ramp to full LR by 100K steps
-  - [8000000, 0.00003]             # Decay to 10% by 8M — fine-tune, don't thrash
-gamma: 0.995                     # Higher discount — Shield plans over longer horizons
+# PPO Hyperparameters (V4 sweep winners)
+lr_schedule:                       # Warmup + decay — scaled for 10M full train
+  - [0, 0.0000017]                 # Start at peak/30 (sweep: 5e-5 peak)
+  - [100000, 0.00005]              # Ramp to peak by 100K
+  - [8000000, 0.000005]            # Decay to 10% by 8M
+gamma: 0.9967                    # Sweep winner: patient risk management
 lambda_: 0.95                    # GAE for advantage estimation
-clip_param: 0.15                 # Tighter clipping — slow, methodical policy changes
-num_epochs: 6                    # Fewer passes — larger batch compensates
-minibatch_size: 256              # Larger batches → better GPU utilization
-train_batch_size_per_learner: 16384 # Larger batch — 128 envs fill this fast
-entropy_coeff_schedule:          # Anneal exploration: lower start, aggressive decay
-  - [0, 0.005]                   # Half of V2 — ×100 rewards are strong enough
-  - [5_000_000, 0.001]           # Halve by midpoint
+clip_param: 0.156                # Sweep winner: moderate clip (was 0.15)
+num_epochs: 6                    # Sweep winner: 6 passes per batch
+minibatch_size: 256              # Sweep winner: smooth gradients
+train_batch_size_per_learner: 16384 # Large batch — stable updates
+entropy_coeff_schedule:          # Anneal exploration (sweep winner: start=0.005)
+  - [0, 0.005]                   # Moderate exploration start
+  - [5_000_000, 0.001]           # 5x reduction by midpoint
   - [10_000_000, 0.0001]         # Near-zero by end — exploit, don't explore
 vf_loss_coeff: 0.5               # Value function coefficient
 grad_clip: 0.5                   # Gradient clipping
@@ -49,16 +53,15 @@ env_config:
 
 # Evaluation
 evaluation:
-  evaluation_interval: 50        # Every 50 training iterations (less frequent, less overhead)
-  evaluation_duration: 5         # 5 eval episodes (unit=episodes set in train.py)
-  evaluation_parallel_to_training: true  # Eval runs in background, doesn't block training
+  evaluation_interval: 50        # Every 50 training iterations
+  evaluation_duration: 5         # 5 eval episodes
+  evaluation_parallel_to_training: true
   num_env_runners: 1
 
 # Checkpointing (iterations, not timesteps)
 checkpoint_freq: 50
 
 # GPU — auto-detected at runtime by train.py
-# Set to 0 for CPU-only, or leave as-is for auto-detect
 num_gpus: 1
 num_learners: 1
 num_gpus_per_learner: 1
@@ -66,5 +69,5 @@ num_gpus_per_learner: 1
 # W&B Logging
 wandb:
   project: moleapp-rl
-  run_name: shield-v2-rllib
-  tags: ["shield", "conservative", "ppo", "rllib"]
+  run_name: shield-v4-rllib
+  tags: ["shield", "conservative", "ppo", "rllib", "v4-sweep"]
