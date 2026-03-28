@@ -226,6 +226,7 @@ def run_sweep(
             mode="max",
             num_samples=search["num_samples"],
             scheduler=scheduler,
+            max_concurrent_trials=3,    # Cap at 3 — each trial uses ~10GB RAM (58GB pod)
         ),
         run_config=TuneRunConfig(
             name=f"{profile}-sweep-v4",
