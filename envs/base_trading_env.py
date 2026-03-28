@@ -361,6 +361,9 @@ class BaseTradingEnv(gym.Env):
         # Market impact slippage: worse fill price for larger orders
         price = self._get_price(idx)
         slippage_pct = self._estimate_slippage(position_usd, price, idx)
+        # Latency slippage: LLM inference + AA bundler/relayer jitter (1-5 bps)
+        latency_slippage = self.np_random.uniform(0.0001, 0.0005)
+        slippage_pct += latency_slippage
         # Adverse fill: longs pay more, shorts receive less
         fill_price = price * (1.0 + direction * slippage_pct)
         slippage_cost = position_usd * slippage_pct
@@ -427,10 +430,11 @@ class BaseTradingEnv(gym.Env):
         # Exit fee
         fee = pos.size_usd * TAKER_FEE_PCT
 
-        # Exit slippage (closing = reverse direction, same impact model)
+        # Exit slippage (closing = reverse direction, same impact model + latency)
         current_idx = self._episode_start_idx + self.state.step
         price = self._get_price(current_idx)
         exit_slippage = self._estimate_slippage(pos.size_usd, price, current_idx)
+        exit_slippage += self.np_random.uniform(0.0001, 0.0005)  # LLM+AA latency jitter
         slippage_cost = pos.size_usd * exit_slippage
 
         total_cost = fee + slippage_cost
