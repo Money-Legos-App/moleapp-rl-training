@@ -118,8 +118,8 @@ class TestYAMLConfigParsing:
     def test_shield_gamma(self, shield_config):
         assert shield_config["gamma"] == 0.9967  # V4 sweep-optimized
 
-    def test_builder_gamma_0995(self, builder_config):
-        assert builder_config["gamma"] == 0.995
+    def test_builder_gamma(self, builder_config):
+        assert builder_config["gamma"] == 0.9963  # V4 sweep-optimized
 
     def test_shield_eval_parallel(self, shield_config):
         eval_cfg = shield_config.get("evaluation", {})
@@ -174,8 +174,8 @@ class TestYAMLConfigParsing:
     def test_shield_clip_param(self, shield_config):
         assert shield_config["clip_param"] == 0.156  # V4 sweep-optimized
 
-    def test_builder_clip_param_015(self, builder_config):
-        assert builder_config["clip_param"] == 0.15
+    def test_builder_clip_param(self, builder_config):
+        assert builder_config["clip_param"] == 0.277  # V4 sweep-optimized
 
 
 # ──────────────────────────────────────────────────────────────────────

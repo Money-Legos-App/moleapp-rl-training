@@ -1,30 +1,37 @@
-# Builder (MODERATE) PPO Training Configuration — RLlib
+# Builder (MODERATE) PPO Training Configuration — V4 (Sweep-Optimized)
 # Target: Sharpe > 0.8, Max Drawdown < 25%, Steady Growth
+#
+# Hyperparameters from V4 sweep (trial bd29e_00003):
+#   return: -1407 (best of 6), drawdown: 8.5%, win_rate: 39.8%
+#   Sweep: 6 trials, 750K steps, ASHA scheduler, metric=episode_return_mean
 
 algorithm: PPO
 env: BuilderTradingEnv
 
-total_timesteps: 10_000_000
+# Training loop
+total_timesteps: 10_000_000     # ~14h on RTX 4090 (8 runners), ~8h on A100
 
-lr_schedule:                       # Warmup + decay — let VF learn before policy moves
-  - [0, 0.00001]                   # Start tiny — random actions, VF is garbage
-  - [100000, 0.0003]               # Ramp to full LR by 100K steps
-  - [8000000, 0.00003]             # Decay to 10% by 8M — fine-tune, don't thrash
-gamma: 0.995                     # Slightly higher discount — trend following
-lambda_: 0.95
-clip_param: 0.15                 # Tighter clipping — slow, methodical policy changes
-num_epochs: 6                    # Fewer passes — larger batch compensates
-minibatch_size: 256              # Larger batches → better GPU utilization
-train_batch_size_per_learner: 16384 # Larger batch — 128 envs fill this fast
-entropy_coeff_schedule:          # Anneal exploration: lower start, aggressive decay
-  - [0, 0.005]                   # Half of V2 — ×100 rewards are strong enough
-  - [5_000_000, 0.001]           # Halve by midpoint
+# PPO Hyperparameters (V4 sweep winners)
+lr_schedule:                       # Warmup + decay — scaled for 10M full train
+  - [0, 0.0000167]                 # Start at peak/30 (sweep: 5e-4 peak)
+  - [100000, 0.0005]               # Ramp to peak by 100K
+  - [8000000, 0.00005]             # Decay to 10% by 8M
+gamma: 0.9963                    # Sweep winner: patient trend following
+lambda_: 0.95                    # GAE for advantage estimation
+clip_param: 0.277                # Sweep winner: moderate clip (was 0.15)
+num_epochs: 8                    # Sweep winner: 8 passes per batch
+minibatch_size: 256              # Sweep winner: smooth gradients
+train_batch_size_per_learner: 16384 # Large batch — stable updates
+entropy_coeff_schedule:          # Anneal exploration (sweep winner: start=0.005)
+  - [0, 0.005]                   # Low exploration start (same as shield)
+  - [5_000_000, 0.001]           # 5x reduction by midpoint
   - [10_000_000, 0.0001]         # Near-zero by end — exploit, don't explore
-vf_loss_coeff: 0.5
-grad_clip: 0.5
+vf_loss_coeff: 0.5               # Value function coefficient
+grad_clip: 0.5                   # Gradient clipping
 
+# Policy Network
 model:
-  fcnet_hiddens: [256, 256, 128]
+  fcnet_hiddens: [256, 256, 128]   # 3-layer MLP
   fcnet_activation: tanh
 
 # Parallelism — 10 runners + 1 learner + 1 driver = 12 of 13 CPUs
@@ -32,6 +39,7 @@ num_env_runners: 10
 num_envs_per_env_runner: 4
 # Observation normalization: handled by gym.wrappers.NormalizeObservation in env registration
 
+# Environment Parameters
 env_config:
   max_leverage: 2
   max_positions: 4
@@ -43,19 +51,23 @@ env_config:
   episode_length: 2880           # 120 days of 1h candles (~4 months)
   max_drawdown_pct: 0.20         # 20% kill switch — terminates episode
 
+# Evaluation
 evaluation:
-  evaluation_interval: 50
-  evaluation_duration: 5
-  evaluation_parallel_to_training: true  # Eval runs in background, doesn't block training
+  evaluation_interval: 50        # Every 50 training iterations
+  evaluation_duration: 5         # 5 eval episodes
+  evaluation_parallel_to_training: true
   num_env_runners: 1
 
+# Checkpointing (iterations, not timesteps)
 checkpoint_freq: 50
 
+# GPU — auto-detected at runtime by train.py
 num_gpus: 1
 num_learners: 1
 num_gpus_per_learner: 1
 
+# W&B Logging
 wandb:
   project: moleapp-rl
-  run_name: builder-v2-rllib
-  tags: ["builder", "moderate", "ppo", "rllib"]
+  run_name: builder-v4-rllib
+  tags: ["builder", "moderate", "ppo", "rllib", "v4-sweep"]
