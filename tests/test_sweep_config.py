@@ -40,20 +40,21 @@ class TestTuneSweepConfig:
         assert self.config["sweep"]["metric"] == "env_runners/episode_return_mean"
         assert self.config["sweep"]["mode"] == "max"
 
-    def test_all_four_params_present(self):
+    def test_swept_params_present(self):
         params = self.config["sweep"]["parameters"]
-        assert "lr" in params
-        assert "entropy_coeff" in params
+        assert "_peak_lr" in params
+        assert "_start_entropy" in params
         assert "minibatch_size" in params
         assert "gamma" in params
+        assert "clip_param" in params
 
-    def test_lr_range(self):
-        lr = self.config["sweep"]["parameters"]["lr"]
+    def test_peak_lr_range(self):
+        lr = self.config["sweep"]["parameters"]["_peak_lr"]
         assert float(lr["min"]) >= 1e-6
         assert float(lr["max"]) <= 1e-2
 
-    def test_entropy_coeff_range(self):
-        ec = self.config["sweep"]["parameters"]["entropy_coeff"]
+    def test_start_entropy_range(self):
+        ec = self.config["sweep"]["parameters"]["_start_entropy"]
         assert float(ec["min"]) >= 1e-4
         assert float(ec["max"]) <= 0.1
 
@@ -148,7 +149,7 @@ class TestTradingCallbacks:
 class TestTuneSweepImports:
     def test_tune_sweep_imports(self):
         """tune_sweep.py imports without error."""
-        from training.tune_sweep import SHIELD_ENV_KWARGS, load_episode_data
+        from training.tune_sweep import SHIELD_ENV_KWARGS, _make_lr_schedule
         assert SHIELD_ENV_KWARGS["max_leverage"] == 1
 
     def test_shield_env_kwargs_match_config(self):
@@ -158,8 +159,23 @@ class TestTuneSweepImports:
         assert SHIELD_ENV_KWARGS["max_leverage"] == 1
         assert SHIELD_ENV_KWARGS["max_positions"] == 2
         assert SHIELD_ENV_KWARGS["max_sl_pct"] == 0.03
-        assert SHIELD_ENV_KWARGS["max_tp_pct"] == 0.06
+        assert SHIELD_ENV_KWARGS["max_tp_pct"] == 0.075
         assert SHIELD_ENV_KWARGS["initial_capital"] == 1000.0
+
+    def test_lr_schedule_structure(self):
+        """LR schedule should have warmup-peak-decay structure."""
+        from training.tune_sweep import _make_lr_schedule
+        schedule = _make_lr_schedule(3e-4)
+        assert len(schedule) == 3
+        assert schedule[0][1] < schedule[1][1]  # warmup
+        assert schedule[2][1] < schedule[1][1]  # decay
+
+    def test_entropy_schedule_decays(self):
+        """Entropy schedule should decay from start to near-zero."""
+        from training.tune_sweep import _make_entropy_schedule
+        schedule = _make_entropy_schedule(0.005)
+        assert schedule[0][1] > schedule[-1][1]
+        assert schedule[-1][1] == 0.0001
 
 
 # ──────────────────────────────────────────────────────────────────────
