@@ -174,9 +174,6 @@ def build_sweep_config(
             evaluation_interval=None,   # Disable eval during sweep — saves GPU memory
         )
         .callbacks(callbacks_class=TradingCallbacks)
-        .resources(
-            num_gpus=0,                 # Driver doesn't need GPU
-        )
         .learners(
             num_learners=1,
             num_gpus_per_learner=1,
