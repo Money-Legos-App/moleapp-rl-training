@@ -1,0 +1,52 @@
+# Ray Tune Sweep — Builder V4 Hyperparameter Optimization
+# =========================================================
+# Builder = aggressive alpha extraction. Optimizes raw episode_return_mean.
+# Wider search ranges than Shield — Builder can tolerate more volatility.
+#
+# Usage:
+#   python -m training.tune_sweep --profile builder --config training/configs/tune_builder.yaml
+
+sweep:
+  method: asha
+  num_samples: 20
+  grace_period: 500000
+  max_timesteps: 2000000
+
+  metric: env_runners/episode_return_mean
+  mode: max
+
+  parameters:
+    _peak_lr:
+      distribution: log_uniform
+      min: 1e-4
+      max: 1e-3
+    _start_entropy:
+      distribution: log_uniform
+      min: 0.005
+      max: 0.02
+    gamma:
+      distribution: uniform
+      min: 0.99
+      max: 0.997
+    clip_param:
+      distribution: uniform
+      min: 0.15
+      max: 0.30
+    minibatch_size:
+      values: [128, 256, 512]
+    num_epochs:
+      values: [4, 6, 8]
+    train_batch_size_per_learner:
+      values: [8192, 16384]
+
+  fixed:
+    lambda_: 0.95
+    vf_loss_coeff: 0.5
+    grad_clip: 0.5
+    model:
+      fcnet_hiddens: [256, 256, 128]
+      fcnet_activation: tanh
+
+wandb:
+  project: moleapp-rl
+  group: builder-sweep-v4

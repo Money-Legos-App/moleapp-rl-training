@@ -1,46 +1,45 @@
-# Ray Tune Sweep — Shield V3 Hyperparameter Optimization
-# ========================================================
-# Usage:
-#   python -m training.tune_sweep --config training/configs/tune_shield.yaml
+# Ray Tune Sweep — Shield V4 Hyperparameter Optimization
+# =========================================================
+# Shield = institutional-grade moderate risk. Optimizes risk_adjusted_return
+# (return / max_drawdown) — NOT raw return. This prevents selecting runs
+# that got lucky on a big trade but suffered 15% drawdowns.
 #
-# Sweeps V3-relevant params while maintaining schedule structure.
-# ASHA kills bad trials early — ~60% of trials stopped before 1M steps.
+# Usage:
+#   python -m training.tune_sweep --profile shield --config training/configs/tune_shield.yaml
 
 sweep:
   method: asha
   num_samples: 20
-  grace_period: 400000    # Min steps before killing a trial
-  max_timesteps: 2000000  # Per-trial budget
+  grace_period: 500000    # Don't kill late-bloomers — PPO agents need time to map VF
+  max_timesteps: 2000000
 
-  metric: env_runners/episode_return_mean
+  metric: env_runners/risk_adjusted_return
   mode: max
 
-  # Swept parameters (actual search spaces defined in tune_sweep.py)
   parameters:
     _peak_lr:
       distribution: log_uniform
       min: 5e-5
-      max: 1e-3
+      max: 3e-4
     _start_entropy:
       distribution: log_uniform
       min: 0.002
-      max: 0.02
+      max: 0.008
     gamma:
       distribution: uniform
-      min: 0.99
+      min: 0.995
       max: 0.999
     clip_param:
       distribution: uniform
-      min: 0.1
-      max: 0.25
+      min: 0.08
+      max: 0.18
     minibatch_size:
-      values: [128, 256, 512]
+      values: [256, 512]
     num_epochs:
-      values: [4, 6, 8]
+      values: [4, 6]
     train_batch_size_per_learner:
-      values: [8192, 16384]
+      values: [16384]
 
-  # Fixed PPO params (not swept)
   fixed:
     lambda_: 0.95
     vf_loss_coeff: 0.5
@@ -49,7 +48,6 @@ sweep:
       fcnet_hiddens: [256, 256, 128]
       fcnet_activation: tanh
 
-# W&B integration
 wandb:
   project: moleapp-rl
-  group: shield-sweep-v3
+  group: shield-sweep-v4

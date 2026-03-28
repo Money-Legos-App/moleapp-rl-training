@@ -70,6 +70,11 @@ class TradingCallbacks(DefaultCallbacks):
         win_rate = winning_trades / max(total_trades, 1)
         max_drawdown = info.get("max_drawdown", 0.0)
 
+        # Risk-adjusted return: return / max(drawdown, 0.01)
+        # Used as ASHA optimization metric for Shield sweep.
+        # Penalizes high-drawdown runs even if they got lucky on returns.
+        risk_adjusted_return = total_return / max(max_drawdown, 0.01)
+
         # Log via MetricsLogger (new API stack)
         metrics_logger.log_value("total_return", total_return)
         metrics_logger.log_value("max_drawdown", max_drawdown)
@@ -77,3 +82,4 @@ class TradingCallbacks(DefaultCallbacks):
         metrics_logger.log_value("total_trades", total_trades)
         metrics_logger.log_value("total_pnl", total_pnl)
         metrics_logger.log_value("winning_trades", winning_trades)
+        metrics_logger.log_value("risk_adjusted_return", risk_adjusted_return)

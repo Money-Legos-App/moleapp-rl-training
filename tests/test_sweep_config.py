@@ -23,63 +23,87 @@ from data.preprocessors.feature_engineer import (
 # Test: Tune Sweep YAML Config
 # ──────────────────────────────────────────────────────────────────────
 
-TUNE_CONFIG_PATH = Path("training/configs/tune_shield.yaml")
+SHIELD_TUNE_PATH = Path("training/configs/tune_shield.yaml")
+BUILDER_TUNE_PATH = Path("training/configs/tune_builder.yaml")
 
 
-class TestTuneSweepConfig:
+class TestShieldSweepConfig:
     @pytest.fixture(autouse=True)
     def load_config(self):
-        assert TUNE_CONFIG_PATH.exists(), f"Tune config not found at {TUNE_CONFIG_PATH}"
-        with open(TUNE_CONFIG_PATH) as f:
+        assert SHIELD_TUNE_PATH.exists()
+        with open(SHIELD_TUNE_PATH) as f:
             self.config = yaml.safe_load(f)
 
     def test_method_is_asha(self):
         assert self.config["sweep"]["method"] == "asha"
 
-    def test_metric_configured(self):
-        assert self.config["sweep"]["metric"] == "env_runners/episode_return_mean"
+    def test_shield_optimizes_risk_adjusted_return(self):
+        """Shield must optimize risk_adjusted_return, NOT raw return."""
+        assert self.config["sweep"]["metric"] == "env_runners/risk_adjusted_return"
         assert self.config["sweep"]["mode"] == "max"
+
+    def test_grace_period_at_least_500k(self):
+        """500K grace period protects late-blooming agents."""
+        assert self.config["sweep"]["grace_period"] >= 500_000
 
     def test_swept_params_present(self):
         params = self.config["sweep"]["parameters"]
-        assert "_peak_lr" in params
-        assert "_start_entropy" in params
-        assert "minibatch_size" in params
-        assert "gamma" in params
-        assert "clip_param" in params
+        for key in ("_peak_lr", "_start_entropy", "minibatch_size", "gamma", "clip_param"):
+            assert key in params
 
-    def test_peak_lr_range(self):
-        lr = self.config["sweep"]["parameters"]["_peak_lr"]
-        assert float(lr["min"]) >= 1e-6
-        assert float(lr["max"]) <= 1e-2
-
-    def test_start_entropy_range(self):
-        ec = self.config["sweep"]["parameters"]["_start_entropy"]
-        assert float(ec["min"]) >= 1e-4
-        assert float(ec["max"]) <= 0.1
-
-    def test_clip_param_range(self):
+    def test_shield_tight_clip_range(self):
+        """Shield clip_param should be tighter than Builder."""
         cp = self.config["sweep"]["parameters"]["clip_param"]
-        assert cp["min"] >= 0.05
-        assert cp["max"] <= 0.5
+        assert cp["max"] <= 0.20  # institutional grade — no wild swings
 
-    def test_minibatch_size_values(self):
-        bs = self.config["sweep"]["parameters"]["minibatch_size"]
-        assert "values" in bs
-        for v in bs["values"]:
-            # Must be powers of 2
-            assert v > 0 and (v & (v - 1)) == 0, f"{v} is not a power of 2"
-
-    def test_gamma_range(self):
+    def test_shield_high_gamma(self):
+        """Shield gamma should favor long-horizon planning."""
         g = self.config["sweep"]["parameters"]["gamma"]
-        assert g["min"] >= 0.9
-        assert g["max"] <= 1.0
+        assert g["min"] >= 0.99
 
-    def test_num_samples_is_reasonable(self):
+    def test_shield_low_entropy(self):
+        """Shield entropy should start lower — less random exploration."""
+        ec = self.config["sweep"]["parameters"]["_start_entropy"]
+        assert float(ec["max"]) <= 0.01
+
+    def test_num_samples_reasonable(self):
         assert 10 <= self.config["sweep"]["num_samples"] <= 100
 
-    def test_grace_period_configured(self):
-        assert self.config["sweep"]["grace_period"] > 0
+
+class TestBuilderSweepConfig:
+    @pytest.fixture(autouse=True)
+    def load_config(self):
+        assert BUILDER_TUNE_PATH.exists()
+        with open(BUILDER_TUNE_PATH) as f:
+            self.config = yaml.safe_load(f)
+
+    def test_builder_optimizes_raw_return(self):
+        """Builder optimizes episode_return_mean — aggressive alpha."""
+        assert self.config["sweep"]["metric"] == "env_runners/episode_return_mean"
+
+    def test_grace_period_at_least_500k(self):
+        assert self.config["sweep"]["grace_period"] >= 500_000
+
+    def test_builder_wider_clip_range(self):
+        """Builder clip_param can be looser for faster adaptation."""
+        cp = self.config["sweep"]["parameters"]["clip_param"]
+        assert cp["max"] >= 0.25
+
+    def test_builder_higher_entropy(self):
+        """Builder allows higher entropy for more exploration."""
+        ec = self.config["sweep"]["parameters"]["_start_entropy"]
+        assert float(ec["max"]) >= 0.015
+
+    def test_builder_lower_gamma(self):
+        """Builder can use shorter horizons for near-term alpha."""
+        g = self.config["sweep"]["parameters"]["gamma"]
+        assert g["min"] <= 0.995
+
+    def test_divergent_from_shield(self):
+        """Shield and Builder configs must NOT be identical."""
+        with open(SHIELD_TUNE_PATH) as f:
+            shield = yaml.safe_load(f)
+        assert self.config["sweep"]["metric"] != shield["sweep"]["metric"]
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -154,18 +178,32 @@ class TestTradingCallbacks:
 class TestTuneSweepImports:
     def test_tune_sweep_imports(self):
         """tune_sweep.py imports without error."""
-        from training.tune_sweep import SHIELD_ENV_KWARGS, _make_lr_schedule
+        from training.tune_sweep import SHIELD_ENV_KWARGS, PROFILE_ENV_KWARGS, PROFILE_SEARCH
         assert SHIELD_ENV_KWARGS["max_leverage"] == 1
+        assert "shield" in PROFILE_ENV_KWARGS
+        assert "builder" in PROFILE_ENV_KWARGS
+        assert "shield" in PROFILE_SEARCH
+        assert "builder" in PROFILE_SEARCH
 
     def test_shield_env_kwargs_match_config(self):
         """Tune sweep's Shield params match shield_config.yaml."""
-        from training.tune_sweep import SHIELD_ENV_KWARGS
+        from training.tune_sweep import PROFILE_ENV_KWARGS
 
-        assert SHIELD_ENV_KWARGS["max_leverage"] == 1
-        assert SHIELD_ENV_KWARGS["max_positions"] == 2
-        assert SHIELD_ENV_KWARGS["max_sl_pct"] == 0.03
-        assert SHIELD_ENV_KWARGS["max_tp_pct"] == 0.075
-        assert SHIELD_ENV_KWARGS["initial_capital"] == 1000.0
+        shield = PROFILE_ENV_KWARGS["shield"]
+        assert shield["max_leverage"] == 1
+        assert shield["max_positions"] == 2
+        assert shield["max_sl_pct"] == 0.03
+        assert shield["max_tp_pct"] == 0.075
+        assert shield["initial_capital"] == 1000.0
+
+    def test_builder_env_kwargs_match_config(self):
+        """Tune sweep's Builder params match builder_config.yaml."""
+        from training.tune_sweep import PROFILE_ENV_KWARGS
+
+        builder = PROFILE_ENV_KWARGS["builder"]
+        assert builder["max_leverage"] == 2
+        assert builder["max_positions"] == 4
+        assert builder["max_drawdown_pct"] == 0.20
 
     def test_lr_schedule_structure(self):
         """LR schedule should have warmup-peak-decay structure."""
@@ -181,6 +219,16 @@ class TestTuneSweepImports:
         schedule = _make_entropy_schedule(0.005)
         assert schedule[0][1] > schedule[-1][1]
         assert schedule[-1][1] == 0.0001
+
+    def test_shield_metric_is_risk_adjusted(self):
+        """Shield sweep must optimize risk_adjusted_return."""
+        from training.tune_sweep import PROFILE_SEARCH
+        assert PROFILE_SEARCH["shield"]["metric"] == "env_runners/risk_adjusted_return"
+
+    def test_builder_metric_is_raw_return(self):
+        """Builder sweep must optimize episode_return_mean."""
+        from training.tune_sweep import PROFILE_SEARCH
+        assert PROFILE_SEARCH["builder"]["metric"] == "env_runners/episode_return_mean"
 
 
 # ──────────────────────────────────────────────────────────────────────
