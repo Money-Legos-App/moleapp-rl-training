@@ -149,7 +149,7 @@ def build_sweep_config(
             env_config=train_env_config,
         )
         .env_runners(
-            num_env_runners=4,          # Eval disabled — safe to use 4
+            num_env_runners=2,          # Keep low — each runner holds 254K market data copy
             num_envs_per_env_runner=2,
         )
         .training(
@@ -174,12 +174,8 @@ def build_sweep_config(
             evaluation_interval=None,   # Disable eval during sweep — saves GPU memory
         )
         .callbacks(callbacks_class=TradingCallbacks)
-        .resources(
-            num_gpus=1,                 # GPU for the local learner process
-        )
         .learners(
-            num_learners=0,             # Local mode — train in PPO process directly
-            num_gpus_per_learner=1,
+            num_learners=0,             # Local mode — CPU is fine for 200K param network
         )
     )
 
