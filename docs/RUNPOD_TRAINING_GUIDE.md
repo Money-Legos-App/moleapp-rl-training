@@ -15,11 +15,12 @@ Step-by-step guide to provision a RunPod GPU instance, clone the repo, and train
 3. [Connect to Your Pod](#3-connect-to-your-pod)
 4. [Clone & Setup](#4-clone--setup)
 5. [Launch Training](#5-launch-training)
-6. [Monitor Training](#6-monitor-training)
-7. [Export ONNX Models](#7-export-onnx-models)
-8. [Upload Models to R2](#8-upload-models-to-r2)
-9. [Costs & GPU Recommendations](#9-costs--gpu-recommendations)
-10. [Troubleshooting](#10-troubleshooting)
+6. [Hyperparameter Sweep (V4)](#6-hyperparameter-sweep-v4)
+7. [Monitor Training](#7-monitor-training)
+8. [Export ONNX Models](#8-export-onnx-models)
+9. [Upload Models to R2](#9-upload-models-to-r2)
+10. [Costs & GPU Recommendations](#10-costs--gpu-recommendations)
+11. [Troubleshooting](#11-troubleshooting)
 
 ---
 
@@ -59,15 +60,18 @@ Go to **Pods > + GPU Pod** and select a base template:
 | **RTX 3090** | 24 GB | ~$0.22/hr | ~30-40h per profile | Budget option |
 | **A40** | 48 GB | ~$0.76/hr | ~20-25h per profile | Good middle ground |
 
-> A single GPU is sufficient. Our PPO config uses 1 learner + 4 CPU env runners.
+> A single GPU is sufficient. Our PPO config uses 1 learner + 2 CPU env runners. Note: For the 200K-parameter network, GPU utilization is minimal (~2% VRAM) — the bottleneck is CPU-based environment stepping, not gradient computation. The GPU mainly accelerates tensor operations during learner updates.
 
 ### Step 2.3 — Configure Storage
 
-- **Container Disk:** 20 GB (default is fine)
-- **Volume Disk:** 50 GB — mount at `/workspace`
+- **Container Disk:** 50 GB (default 20 GB fills up fast with Ray temp files)
+- **Volume Disk:** 250 GB — mount at `/workspace`
   - Parquets + episodes = ~140 MB
   - Checkpoints during training = ~5-10 GB per profile
+  - Ray Tune sweep results = ~20-30 GB per sweep (market data serialized per trial)
   - Volume persists across pod restarts (important for long runs)
+
+> **Critical:** Always redirect Ray's temp and results to the volume — the container disk fills up quickly. See [Section 6](#6-hyperparameter-sweep-v4) for details.
 
 ### Step 2.4 — Set Environment Variables
 
@@ -185,7 +189,7 @@ python scripts/r2_sync.py download --prefix episodes --data-dir data/episodes
 
 ### Suppress RLlib deprecation warnings
 
-RLlib v2.40+ prints many deprecation warnings (UnifiedLogger, RLModule config, etc.) that are internal to Ray and don't affect training. Suppress them:
+RLlib v2.54+ prints many deprecation warnings (RLModule config, RunConfig, etc.) that are internal to Ray and don't affect training. Suppress them:
 
 ```bash
 export PYTHONWARNINGS="ignore::DeprecationWarning"
@@ -195,13 +199,23 @@ export RAY_DEDUP_LOGS=1
 
 Add these to your shell or prefix the training command.
 
+### Redirect Ray temp files to volume
+
+Ray writes large temp files to `/tmp` by default, which fills the container disk quickly. Always redirect:
+
+```bash
+export RAY_TMPDIR=/workspace/ray_tmp
+mkdir -p /workspace/ray_tmp
+```
+
 ### Train Shield first (most constrained, fastest to validate)
 
 ```bash
 tmux new -s train
 
-# Suppress warnings + train
+# Suppress warnings + redirect temp + train
 PYTHONWARNINGS="ignore::DeprecationWarning" RAY_DISABLE_DOCKER_CPU_WARNING=1 \
+RAY_TMPDIR=/workspace/ray_tmp \
   python -m training.train --profile shield --config training/configs/shield_config.yaml
 
 # Detach: Ctrl+B then D
@@ -213,7 +227,8 @@ PYTHONWARNINGS="ignore::DeprecationWarning" RAY_DISABLE_DOCKER_CPU_WARNING=1 \
 ```bash
 tmux new -s train
 
-PYTHONWARNINGS="ignore::DeprecationWarning" RAY_DISABLE_DOCKER_CPU_WARNING=1 bash -c '
+PYTHONWARNINGS="ignore::DeprecationWarning" RAY_DISABLE_DOCKER_CPU_WARNING=1 \
+RAY_TMPDIR=/workspace/ray_tmp bash -c '
   python -m training.train --profile shield  --config training/configs/shield_config.yaml && \
   python -m training.train --profile builder --config training/configs/builder_config.yaml
 '
@@ -245,34 +260,126 @@ Training data (254K+ timesteps across 15 assets) is saved to `/tmp/rl_training_d
 
 ---
 
-## 6. Monitor Training
+## 6. Hyperparameter Sweep (V4)
+
+Before full 10M-step training, run a hyperparameter sweep to find optimal configs for each profile. The sweep uses Ray Tune with ASHA early stopping.
+
+### Why sweep?
+
+Different risk profiles need fundamentally different hyperparameters:
+- **Shield** optimizes `risk_adjusted_return` (return / max_drawdown) — tight clip, high gamma, low entropy
+- **Builder** optimizes `episode_return_mean` (raw returns) — loose clip, lower gamma, higher entropy
+
+### The "Valley of Death"
+
+Hyperliquid agents need time to learn real-world fee structures (maker/taker fees, slippage, funding rates). Early in training, agents lose money just figuring out the market. The ASHA scheduler's grace period (300K steps) protects late-blooming agents from being killed before they learn — without this, ASHA biases toward "coward" configs that sit in cash and never trade.
+
+### Run the sweep
+
+```bash
+tmux new -s sweep
+
+# Clean previous results
+rm -rf /workspace/ray_results/*
+
+# Shield sweep (~3 hours on RTX 4090)
+PYTHONWARNINGS="ignore::DeprecationWarning" RAY_DISABLE_DOCKER_CPU_WARNING=1 \
+RAY_TMPDIR=/workspace/ray_tmp \
+  python -m training.tune_sweep --profile shield 2>&1 | tee /workspace/sweep_log.txt
+
+# After Shield completes, run Builder sweep
+PYTHONWARNINGS="ignore::DeprecationWarning" RAY_DISABLE_DOCKER_CPU_WARNING=1 \
+RAY_TMPDIR=/workspace/ray_tmp \
+  python -m training.tune_sweep --profile builder 2>&1 | tee /workspace/builder_sweep_log.txt
+
+# Ctrl+B, D to detach
+```
+
+### Sweep configuration (V4)
+
+| Setting | Shield | Builder |
+|---|---|---|
+| Total steps per trial | 750K | 750K |
+| Number of trials | 6 | 6 |
+| Grace period (ASHA) | 300K | 300K |
+| Optimization metric | `risk_adjusted_return` | `episode_return_mean` |
+| LR range | 5e-5 to 3e-4 | 1e-4 to 1e-3 |
+| Clip range | 0.08-0.18 (tight) | 0.15-0.30 (loose) |
+| Gamma range | 0.995-0.999 (patient) | 0.99-0.997 (near-term) |
+| Entropy start | 0.002-0.008 (low) | 0.005-0.02 (high) |
+
+### Dry-run (quick sanity check)
+
+```bash
+python -m training.tune_sweep --profile shield --dry-run --dry-run-steps 100
+```
+
+### After sweep completes
+
+The sweep logs the best trial's config. Update `training/configs/shield_config.yaml` (or `builder_config.yaml`) with the winning hyperparameters, then run the full 10M-step training.
+
+### Sweep disk management
+
+Sweeps generate significant disk usage (~20-30 GB) because Ray serializes market data per trial:
+
+```bash
+# Monitor disk usage during sweep
+watch -n 60 'du -sh /workspace/ray_results/* /workspace/ray_tmp/*'
+
+# Clean old sessions between sweep restarts
+rm -rf /workspace/ray_results/* /workspace/ray_tmp/ray/session_*
+
+# Check if old sweep runs are mixed in
+ls /workspace/ray_results/shield-sweep-v4/ | grep PPO | wc -l
+# Should be 6 (one per trial). If more, old runs need cleaning.
+```
+
+### Estimated sweep times (RTX 4090, 16K steps/min measured)
+
+| Phase | Time |
+|---|---|
+| Trial setup | ~1 min |
+| Reach grace period (300K) | ~18 min |
+| Full trial (750K) | ~47 min |
+| **Shield sweep (6 trials, ASHA kills ~3)** | **~3 hours** |
+| **Builder sweep (6 trials)** | **~3 hours** |
+| **Total both sweeps** | **~6 hours** |
+
+---
+
+## 7. Monitor Training
 
 ### W&B Dashboard
 
 Training logs to **W&B project: `moleapp-rl`**. Go to [wandb.ai](https://wandb.ai) and find your run.
 
-Key metrics to watch:
+Key metrics to watch (RLlib new API stack — metrics under `env_runners/`):
 
 | Metric | Shield Target | Builder Target |
 |---|---|---|
-| `train/episode_reward_mean` | Trending up | Trending up |
-| `train/total_return` | > 0% | > 0% |
-| `train/max_drawdown` | < 10% | < 25% |
-| `train/win_rate` | > 60% | > 50% |
-| `eval/episode_reward_mean` | Stable, not diverging from train | Same |
+| `env_runners/episode_return_mean` | Trending up | Trending up |
+| `env_runners/total_return` | > 0% | > 0% |
+| `env_runners/max_drawdown` | < 10% | < 25% |
+| `env_runners/win_rate` | > 60% | > 50% |
+| `env_runners/risk_adjusted_return` | > 1.0 | N/A |
+
+> **Note:** RLlib v2.54+ renamed `episode_reward_mean` to `episode_return_mean`. The old key returns 0.0 on the new API stack. Our callbacks also log `risk_adjusted_return` = total_return / max(max_drawdown, 0.01).
 
 **Warning signs:**
-- `train/max_drawdown` stuck at the kill threshold (10% / 20%) = agent triggers drawdown kill every episode
-- `train/episode_reward_mean` flat after 2M steps = learning stalled, consider HP sweep
-- `eval` diverging from `train` = overfitting
+- `max_drawdown` stuck at the kill threshold (10% / 20%) = agent triggers drawdown kill every episode
+- `episode_return_mean` flat after 2M steps = learning stalled, run HP sweep
+- Large negative returns in first 300K steps are **normal** — agents are learning Hyperliquid fee structures ("valley of death")
+- All returns near zero = agent learned to do nothing (coward config) — needs higher entropy or longer grace period
 
 ### Console output
 
 Every 5 iterations, training prints:
 ```
-[Iter 5] steps=40,960 reward=0.15
-[Iter 10] steps=81,920 reward=0.28
+[Iter 5] steps=81,920 reward=-15946.23 return=-0.045 dd=0.067 wr=0.28 risk_adj=-0.67 trades=12
+[Iter 10] steps=163,840 reward=-10623.41 return=-0.012 dd=0.054 wr=0.31 risk_adj=-0.22 trades=18
 ```
+
+> Early negative rewards are expected — agents are learning Hyperliquid fee structures. Returns should improve past 300K steps.
 
 ### GPU utilization
 
@@ -281,19 +388,21 @@ Every 5 iterations, training prints:
 watch -n 5 nvidia-smi
 ```
 
-You should see ~50-80% GPU utilization during learner updates, lower during env stepping (which happens on CPU).
+With a 200K-parameter network, GPU utilization is low (~2% VRAM, ~560 MiB). This is normal — the network is small and the bottleneck is CPU-based environment stepping, not gradient computation. The GPU handles learner tensor operations in short bursts.
 
 ### RunPod Telemetry
 
 Check the **Telemetry** tab in the RunPod dashboard for:
-- **CPU load**: Should be 30-60% during training (env runners use CPU)
-- **Memory**: Should stay under 60% (38 GiB available on most pods)
-- **GPU utilization**: Should pulse between 0-80% (learner updates are bursty)
+- **CPU load**: 8-30% during training (env runners use CPU, 2 runners default)
+- **Memory**: 40-60% (market data copies in Ray object store)
+- **GPU VRAM**: ~2% (~560 MiB) — normal for 200K param network
+- **GPU Utilization**: 0% between iterations, brief spikes during learner updates
+- **Disk**: Monitor container disk — redirect Ray temp to volume (see Section 5)
 - **Processes**: ~800-1300 is normal (Ray spawns many worker processes)
 
 ---
 
-## 7. Export ONNX Models
+## 8. Export ONNX Models
 
 After training completes, export models for production:
 
@@ -353,7 +462,7 @@ models/onnx/
 
 ---
 
-## 8. Upload Models to R2
+## 9. Upload Models to R2
 
 Upload the trained ONNX models to R2 for the agent-service to pull:
 
@@ -369,7 +478,7 @@ The agent-service on Render will pull from `s3://moleapp-rl-data/models/`.
 
 ---
 
-## 9. Costs & GPU Recommendations
+## 10. Costs & GPU Recommendations
 
 ### Estimated training costs (all 15 assets, 10M timesteps per profile)
 
@@ -399,7 +508,7 @@ python -m training.train --profile shield --config /tmp/shield_quick.yaml --asse
 
 ---
 
-## 10. Troubleshooting
+## 11. Troubleshooting
 
 ### "Python < 3.11" error
 
@@ -464,6 +573,47 @@ Or reduce env runners:
 num_env_runners: 2   # was 4
 ```
 
+### Container disk full (`No space left on device`)
+
+Ray writes temp files and logs to `/tmp` by default. Redirect to the volume:
+```bash
+export RAY_TMPDIR=/workspace/ray_tmp
+mkdir -p /workspace/ray_tmp /workspace/ray_results
+```
+
+Clean up between runs:
+```bash
+rm -rf /tmp/ray /root/ray_results
+rm -rf /workspace/ray_tmp/ray/session_*   # old sessions
+```
+
+### Sweep crashes silently (no traceback)
+
+This usually means a Ray resource conflict. Common causes:
+1. **GPU resource mismatch**: `num_learners=0` with `.resources(num_gpus=1)` can cause conflicts. The sweep uses CPU-only training by default (200K params don't need GPU).
+2. **Object store pressure**: Each env runner holds a copy of 254K-timestep market data. Keep `num_env_runners=2` during sweeps.
+3. **Kernel OOM kill**: Check `dmesg | grep -i "oom\|killed"` for silent kills.
+
+Save sweep output for debugging:
+```bash
+python -m training.tune_sweep --profile shield 2>&1 | tee /workspace/sweep_log.txt
+```
+
+### Sweep `process_trial_result` warnings (6-15 seconds)
+
+```
+WARNING -- The `process_trial_result` operation took 10.448 s
+```
+
+This is normal — Ray serializes large market data arrays in the trial config. It doesn't affect training speed, just the reporting interval between iterations.
+
+### ASHA kills all trials (all configs look bad)
+
+If ASHA kills every trial at the grace period, agents may still be in the "valley of death" learning fee structures. Solutions:
+1. Increase `grace_period` (e.g., 300K → 500K) in `tune_sweep.py`
+2. Increase `SWEEP_TOTAL_TIMESTEPS` proportionally
+3. Check that reward shaping isn't too harsh early in training
+
 ### Training hangs at startup (no iterations for 5+ minutes)
 
 This is a Ray serialization bottleneck. The fix (already applied) is to pass file paths instead of raw data through `env_config`. If you see this on an older commit:
@@ -522,24 +672,35 @@ cd moleapp-rl-training
 apt-get update && apt-get install -y tmux
 bash runpod/setup.sh
 
-# 3. Train (in tmux)
-tmux new -s train
-PYTHONWARNINGS="ignore::DeprecationWarning" RAY_DISABLE_DOCKER_CPU_WARNING=1 bash -c '
-  python -m training.train --profile shield  --config training/configs/shield_config.yaml && \
-  python -m training.train --profile builder --config training/configs/builder_config.yaml
-'
+# 3. Environment setup (every session)
+export PYTHONWARNINGS="ignore::DeprecationWarning"
+export RAY_DISABLE_DOCKER_CPU_WARNING=1
+export RAY_TMPDIR=/workspace/ray_tmp
+mkdir -p /workspace/ray_tmp /workspace/ray_results
+
+# 4. Hyperparameter sweep (optional, ~6h for both profiles)
+tmux new -s sweep
+python -m training.tune_sweep --profile shield 2>&1 | tee /workspace/sweep_log.txt
+# Update configs with best params, then:
+python -m training.tune_sweep --profile builder 2>&1 | tee /workspace/builder_sweep_log.txt
 # Ctrl+B, D to detach
 
-# 4. Export ONNX (after training)
+# 5. Full training (in tmux, ~20-30h per profile)
+tmux new -s train
+python -m training.train --profile shield  --config training/configs/shield_config.yaml && \
+python -m training.train --profile builder --config training/configs/builder_config.yaml
+# Ctrl+B, D to detach
+
+# 6. Export ONNX (after training)
 python -c "
 from serving.model_registry import export_to_onnx
 for p in ['shield', 'builder']:
     export_to_onnx(f'models/{p}/{p}_final', 'models/onnx', p, '1.0.0')
 "
 
-# 5. Upload to R2
+# 7. Upload to R2
 python scripts/r2_sync.py upload --data-dir models/onnx --prefix models --recursive
 
-# 6. Stop the pod (save money!)
+# 8. Stop the pod (save money!)
 # Go to RunPod dashboard > Stop Pod
 ```
