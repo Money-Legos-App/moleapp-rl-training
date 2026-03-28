@@ -261,10 +261,6 @@ def run_sweep(
         run_config=ray.train.RunConfig(
             name=f"{profile}-sweep-v4",
             callbacks=callbacks,
-            stop={"num_env_steps_sampled_lifetime": SWEEP_TOTAL_TIMESTEPS},
-            checkpoint_config=ray.train.CheckpointConfig(
-                num_to_keep=2,
-            ),
         ),
     )
 
