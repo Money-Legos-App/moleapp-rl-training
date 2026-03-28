@@ -115,8 +115,8 @@ class TestYAMLConfigParsing:
     def test_builder_batch_size(self, builder_config):
         assert builder_config["train_batch_size_per_learner"] == 16384
 
-    def test_shield_gamma_0995(self, shield_config):
-        assert shield_config["gamma"] == 0.995
+    def test_shield_gamma(self, shield_config):
+        assert shield_config["gamma"] == 0.9967  # V4 sweep-optimized
 
     def test_builder_gamma_0995(self, builder_config):
         assert builder_config["gamma"] == 0.995
@@ -171,8 +171,8 @@ class TestYAMLConfigParsing:
 
     # --- Clip Param ---
 
-    def test_shield_clip_param_015(self, shield_config):
-        assert shield_config["clip_param"] == 0.15
+    def test_shield_clip_param(self, shield_config):
+        assert shield_config["clip_param"] == 0.156  # V4 sweep-optimized
 
     def test_builder_clip_param_015(self, builder_config):
         assert builder_config["clip_param"] == 0.15
@@ -214,12 +214,12 @@ class TestBuildPPOConfig:
     def test_gamma_propagated(self, shield_config):
         env_config = _dummy_env_config()
         ppo_config = build_ppo_config("shield", shield_config, env_config)
-        assert ppo_config.gamma == 0.995
+        assert ppo_config.gamma == 0.9967  # V4 sweep-optimized
 
     def test_clip_param_propagated(self, shield_config):
         env_config = _dummy_env_config()
         ppo_config = build_ppo_config("shield", shield_config, env_config)
-        assert ppo_config.clip_param == 0.15
+        assert ppo_config.clip_param == 0.156  # V4 sweep-optimized
 
     def test_lr_schedule_propagated(self, shield_config):
         """lr should be the schedule list, not a flat float."""
