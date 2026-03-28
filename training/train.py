@@ -278,18 +278,34 @@ def train(
     iteration = 0
     total_steps = 0
 
+    _dumped_keys = False  # One-time debug dump
+
     while total_steps < total_timesteps:
         result = algo.train()
         iteration += 1
         total_steps = result.get("num_env_steps_sampled_lifetime", result.get("timesteps_total", 0))
 
+        # One-time dump of env_runners keys to diagnose metric names
+        if not _dumped_keys:
+            env_runners_debug = result.get("env_runners", {})
+            logger.info(f"[DEBUG] env_runners keys: {sorted(env_runners_debug.keys())}")
+            _dumped_keys = True
+
         # Log to W&B
         if wandb_run:
             env_runners = result.get("env_runners", {})
+            # New API stack uses episode_return_mean; fall back to episode_reward_mean
+            reward_mean = env_runners.get(
+                "episode_return_mean",
+                env_runners.get("episode_reward_mean", 0),
+            )
             log_data = {
                 "train/timesteps": total_steps,
-                "train/episode_reward_mean": env_runners.get("episode_reward_mean", 0),
-                "train/episode_len_mean": env_runners.get("episode_len_mean", 0),
+                "train/episode_reward_mean": reward_mean,
+                "train/episode_len_mean": env_runners.get(
+                    "episode_len_mean",
+                    env_runners.get("episode_duration_sec_mean", 0),
+                ),
             }
 
             # Learner stats (new stack: result["learners"]["default_policy"])
@@ -310,7 +326,10 @@ def train(
             eval_results = result.get("evaluation", {})
             if eval_results:
                 eval_runners = eval_results.get("env_runners", {})
-                log_data["eval/episode_reward_mean"] = eval_runners.get("episode_reward_mean", 0)
+                log_data["eval/episode_reward_mean"] = eval_runners.get(
+                    "episode_return_mean",
+                    eval_runners.get("episode_reward_mean", 0),
+                )
                 for metric_key in ("total_return", "max_drawdown", "win_rate", "total_trades", "total_pnl"):
                     val = eval_runners.get(metric_key, None)
                     if val is not None:
@@ -321,7 +340,10 @@ def train(
         # Console progress
         if iteration % 5 == 0:
             env_runners = result.get("env_runners", {})
-            reward_mean = env_runners.get("episode_reward_mean", 0)
+            reward_mean = env_runners.get(
+                "episode_return_mean",
+                env_runners.get("episode_reward_mean", 0),
+            )
             win_rate = env_runners.get("win_rate", 0)
             total_return = env_runners.get("total_return", 0)
             logger.info(

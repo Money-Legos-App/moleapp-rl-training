@@ -186,7 +186,7 @@ def run_sweep(config_path: str | None = None, episode_dir: str = "data/episodes"
         "PPO",
         param_space=ppo_config,
         tune_config=tune.TuneConfig(
-            metric="env_runners/episode_reward_mean",
+            metric="env_runners/episode_return_mean",
             mode="max",
             num_samples=30,
             scheduler=scheduler,
@@ -215,7 +215,8 @@ def run_sweep(config_path: str | None = None, episode_dir: str = "data/episodes"
     logger.info(f"  Gamma:     {best_config.get('gamma', 'N/A')}")
     logger.info(f"  Ent Coeff: {best_config.get('entropy_coeff', 'N/A')}")
     logger.info(f"  Batch:     {best_config.get('minibatch_size', 'N/A')}")
-    logger.info(f"  Reward:    {best_metrics.get('env_runners', {}).get('episode_reward_mean', 'N/A')}")
+    er = best_metrics.get("env_runners", {})
+    logger.info(f"  Reward:    {er.get('episode_return_mean', er.get('episode_reward_mean', 'N/A'))}")
     logger.info("=" * 70)
 
     ray.shutdown()
@@ -275,7 +276,8 @@ def run_dry_run(episode_dir: str = "data/episodes", steps: int = 100):
 
     for i in range(max(1, steps // 2048)):
         result = algo.train()
-        reward = result.get("env_runners", {}).get("episode_reward_mean", 0)
+        _er = result.get("env_runners", {})
+        reward = _er.get("episode_return_mean", _er.get("episode_reward_mean", 0))
         total = result.get("timesteps_total", result.get("num_env_steps_sampled_lifetime", 0))
         logger.info(f"  Iter {i + 1}: steps={total}, reward={reward:.4f}")
 

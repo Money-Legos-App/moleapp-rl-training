@@ -12,7 +12,7 @@ sweep:
   grace_period: 500000   # Min timesteps before killing a trial
   max_timesteps: 2000000 # Per-trial budget
 
-  metric: env_runners/episode_reward_mean
+  metric: env_runners/episode_return_mean
   mode: max
 
   # Swept parameters (defined as tune search spaces in code)

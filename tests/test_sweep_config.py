@@ -37,7 +37,7 @@ class TestTuneSweepConfig:
         assert self.config["sweep"]["method"] == "asha"
 
     def test_metric_configured(self):
-        assert self.config["sweep"]["metric"] == "env_runners/episode_reward_mean"
+        assert self.config["sweep"]["metric"] == "env_runners/episode_return_mean"
         assert self.config["sweep"]["mode"] == "max"
 
     def test_all_four_params_present(self):

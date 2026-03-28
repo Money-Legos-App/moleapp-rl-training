@@ -385,7 +385,8 @@ def run_overfit_test(
     for i in range(n_iterations):
         result = algo.train()
         if verbose and (i + 1) % 20 == 0:
-            reward = result.get("env_runners", {}).get("episode_reward_mean", 0)
+            _er = result.get("env_runners", {})
+            reward = _er.get("episode_return_mean", _er.get("episode_reward_mean", 0))
             steps = result.get("num_env_steps_sampled_lifetime", result.get("timesteps_total", 0))
             print(f"  Iter {i + 1}/{n_iterations}: steps={steps}, reward={reward:.2f}")
 
