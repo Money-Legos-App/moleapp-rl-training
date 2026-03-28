@@ -39,7 +39,7 @@ from training.train import _load_training_data
 logger = logging.getLogger(__name__)
 
 # ── Sweep budget ────────────────────────────────────────────────────
-SWEEP_TOTAL_TIMESTEPS = 500_000     # 500K — enough to rank configs (full train is 10M)
+SWEEP_TOTAL_TIMESTEPS = 750_000     # 750K — enough to rank configs past fee-learning valley
 EVAL_INTERVAL = 20
 
 # ── Environment params per profile ──────────────────────────────────
@@ -82,7 +82,7 @@ PROFILE_SEARCH = {
         "batch_choices": [16384],                        # Large — stable updates
         "metric": "env_runners/risk_adjusted_return",    # Return / drawdown
         "num_samples": 6,                                # 6 trials — ASHA kills ~half
-        "grace_period": 150_000,                         # 150K grace — 30% of 500K budget
+        "grace_period": 300_000,                         # 300K grace — protects agents still learning HL fees
     },
     "builder": {
         "peak_lrs": [1e-4, 3e-4, 5e-4, 1e-3],         # Wider LR range — can be aggressive
@@ -94,7 +94,7 @@ PROFILE_SEARCH = {
         "batch_choices": [8192, 16384],                   # Both sizes
         "metric": "env_runners/episode_return_mean",      # Pure return maximization
         "num_samples": 6,
-        "grace_period": 150_000,
+        "grace_period": 300_000,
     },
 }
 
@@ -103,20 +103,20 @@ SHIELD_ENV_KWARGS = PROFILE_ENV_KWARGS["shield"]
 
 
 def _make_lr_schedule(peak_lr: float) -> list:
-    """Build warmup+decay LR schedule scaled to 500K sweep budget."""
+    """Build warmup+decay LR schedule scaled to 750K sweep budget."""
     return [
         [0, peak_lr / 30],              # Start at 1/30 of peak
-        [50_000, peak_lr],              # Ramp to peak by 50K (10% of budget)
-        [400_000, peak_lr / 10],        # Decay to 10% by 80% of budget
+        [75_000, peak_lr],              # Ramp to peak by 75K (10% of budget)
+        [600_000, peak_lr / 10],        # Decay to 10% by 80% of budget
     ]
 
 
 def _make_entropy_schedule(start_entropy: float) -> list:
-    """Build entropy annealing schedule scaled to 500K sweep budget."""
+    """Build entropy annealing schedule scaled to 750K sweep budget."""
     return [
         [0, start_entropy],
-        [250_000, start_entropy / 5],     # 5x reduction by midpoint
-        [500_000, 0.0001],                # Near-zero at end
+        [375_000, start_entropy / 5],     # 5x reduction by midpoint
+        [750_000, 0.0001],                # Near-zero at end
     ]
 
 
