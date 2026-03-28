@@ -263,7 +263,6 @@ def run_sweep(
             callbacks=callbacks,
             stop={"num_env_steps_sampled_lifetime": SWEEP_TOTAL_TIMESTEPS},
             checkpoint_config=ray.train.CheckpointConfig(
-                checkpoint_frequency=20,
                 num_to_keep=2,
             ),
         ),
