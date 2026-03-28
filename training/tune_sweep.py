@@ -225,30 +225,6 @@ def run_sweep(
         reduction_factor=3,
     )
 
-    # W&B callback
-    callbacks = []
-    try:
-        try:
-            from ray.tune.logger.wandb import WandbLoggerCallback
-        except ImportError:
-            from ray.air.integrations.wandb import WandbLoggerCallback
-
-        wandb_cfg = {}
-        if config_path:
-            import yaml
-            with open(config_path) as f:
-                file_cfg = yaml.safe_load(f)
-            wandb_cfg = file_cfg.get("wandb", {})
-
-        callbacks.append(WandbLoggerCallback(
-            project=wandb_cfg.get("project", "moleapp-rl"),
-            group=wandb_cfg.get("group", f"{profile}-sweep-v4"),
-            log_config=True,
-        ))
-        logger.info("W&B logger enabled")
-    except ImportError:
-        logger.info("W&B not available, skipping")
-
     tuner = tune.Tuner(
         "PPO",
         param_space=ppo_config,
@@ -260,7 +236,6 @@ def run_sweep(
         ),
         run_config=ray.train.RunConfig(
             name=f"{profile}-sweep-v4",
-            callbacks=callbacks,
         ),
     )
 
