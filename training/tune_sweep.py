@@ -28,6 +28,7 @@ from pathlib import Path
 import numpy as np
 import ray
 from ray import tune
+from ray.tune import RunConfig as TuneRunConfig
 from ray.tune.schedulers import ASHAScheduler
 from ray.rllib.algorithms.ppo import PPOConfig
 
@@ -234,8 +235,9 @@ def run_sweep(
             num_samples=search["num_samples"],
             scheduler=scheduler,
         ),
-        run_config=ray.train.RunConfig(
+        run_config=TuneRunConfig(
             name=f"{profile}-sweep-v4",
+            verbose=2,
         ),
     )
 
