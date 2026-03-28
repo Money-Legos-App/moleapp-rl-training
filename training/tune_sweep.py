@@ -39,7 +39,7 @@ from training.train import _load_training_data
 logger = logging.getLogger(__name__)
 
 # ── Sweep budget ────────────────────────────────────────────────────
-SWEEP_TOTAL_TIMESTEPS = 2_000_000
+SWEEP_TOTAL_TIMESTEPS = 1_000_000   # 1M is enough to see signal (LR warmup at 100K)
 EVAL_INTERVAL = 20
 
 # ── Environment params per profile ──────────────────────────────────
@@ -81,8 +81,8 @@ PROFILE_SEARCH = {
         "epoch_choices": [4, 6],                         # Fewer — avoid overfitting
         "batch_choices": [16384],                        # Large — stable updates
         "metric": "env_runners/risk_adjusted_return",    # Return / drawdown
-        "num_samples": 20,
-        "grace_period": 500_000,                         # Don't kill late bloomers
+        "num_samples": 12,                               # 12 trials — ASHA kills ~half
+        "grace_period": 300_000,                         # 300K grace — 1M budget means 30% floor
     },
     "builder": {
         "peak_lrs": [1e-4, 3e-4, 5e-4, 1e-3],         # Wider LR range — can be aggressive
@@ -93,8 +93,8 @@ PROFILE_SEARCH = {
         "epoch_choices": [4, 6, 8],                       # More passes OK with higher entropy
         "batch_choices": [8192, 16384],                   # Both sizes
         "metric": "env_runners/episode_return_mean",      # Pure return maximization
-        "num_samples": 20,
-        "grace_period": 500_000,
+        "num_samples": 12,
+        "grace_period": 300_000,
     },
 }
 
@@ -149,7 +149,7 @@ def build_sweep_config(
             env_config=train_env_config,
         )
         .env_runners(
-            num_env_runners=2,          # Reduced for sweep — save memory
+            num_env_runners=4,          # Eval disabled — safe to use 4
             num_envs_per_env_runner=2,
         )
         .training(
