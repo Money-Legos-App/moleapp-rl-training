@@ -66,11 +66,11 @@ class TestYAMLConfigParsing:
         assert BUILDER_CONFIG_PATH.exists()
 
     def test_shield_has_flat_entropy(self, shield_config):
-        """V6: flat entropy at 0.015 — 3x stronger to resist clip-driven determinism."""
+        """V7: Goldilocks entropy — 0.01 flat (0.005 collapsed, 0.015 too strong)."""
         ec = shield_config.get("entropy_coeff")
         assert ec is not None, "Shield config missing entropy_coeff"
         assert isinstance(ec, float), f"Expected flat float, got {type(ec)}"
-        assert ec == 0.015
+        assert ec == 0.01
 
     def test_shield_no_entropy_schedule(self, shield_config):
         """V5: shield uses flat entropy — schedule should NOT be present."""
@@ -120,10 +120,10 @@ class TestYAMLConfigParsing:
         assert len(schedule) >= 2
 
     def test_entropy_values(self, shield_config, builder_config):
-        """Shield flat 0.015 (V6), builder schedule starts at 0.005."""
+        """Shield flat 0.01 (V7 Goldilocks), builder schedule starts at 0.005."""
         shield_ec = shield_config["entropy_coeff"]
         builder_start = builder_config["entropy_coeff_schedule"][0][1]
-        assert shield_ec == 0.015  # V6: 3x stronger for tight clip
+        assert shield_ec == 0.01  # V7: Goldilocks zone
         assert builder_start == 0.005
 
     # --- LR Schedule ---
@@ -188,14 +188,14 @@ class TestBuildPPOConfig:
         assert ppo_config is not None
 
     def test_entropy_flat_propagated(self, shield_config):
-        """V6: entropy_coeff should be flat 0.015."""
+        """V7: entropy_coeff should be flat 0.01."""
         env_config = _dummy_env_config()
         ppo_config = build_ppo_config("shield", shield_config, env_config)
         ec = ppo_config.entropy_coeff
         assert isinstance(ec, float), (
             f"Expected entropy_coeff to be flat float, got {type(ec)}: {ec}"
         )
-        assert ec == 0.015
+        assert ec == 0.01
 
     def test_minibatch_size_propagated(self, shield_config):
         env_config = _dummy_env_config()
