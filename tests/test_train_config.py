@@ -65,17 +65,19 @@ class TestYAMLConfigParsing:
     def test_builder_config_exists(self):
         assert BUILDER_CONFIG_PATH.exists()
 
-    def test_shield_has_flat_entropy(self, shield_config):
-        """V7: Goldilocks entropy — 0.01 flat (0.005 collapsed, 0.015 too strong)."""
-        ec = shield_config.get("entropy_coeff")
-        assert ec is not None, "Shield config missing entropy_coeff"
-        assert isinstance(ec, float), f"Expected flat float, got {type(ec)}"
-        assert ec == 0.01
+    def test_shield_has_entropy_schedule(self, shield_config):
+        """V8: entropy annealing — 0.01 → 0.001 over 10M steps."""
+        schedule = shield_config.get("entropy_coeff_schedule")
+        assert schedule is not None, "Shield config missing entropy_coeff_schedule"
+        assert isinstance(schedule, list)
+        assert len(schedule) >= 3  # At least start, mid, end
+        assert schedule[0][1] == 0.01  # Start high for exploration
+        assert schedule[-1][1] <= 0.001  # End low for exploitation
 
-    def test_shield_no_entropy_schedule(self, shield_config):
-        """V5: shield uses flat entropy — schedule should NOT be present."""
-        assert "entropy_coeff_schedule" not in shield_config, (
-            "Shield V5 should use flat entropy_coeff, not a schedule"
+    def test_shield_no_flat_entropy(self, shield_config):
+        """V8: shield uses entropy schedule — flat coeff should NOT be present."""
+        assert "entropy_coeff" not in shield_config, (
+            "Shield V8 should use entropy_coeff_schedule, not flat entropy_coeff"
         )
 
     def test_shield_minibatch_256(self, shield_config):
@@ -120,10 +122,10 @@ class TestYAMLConfigParsing:
         assert len(schedule) >= 2
 
     def test_entropy_values(self, shield_config, builder_config):
-        """Shield flat 0.01 (V7 Goldilocks), builder schedule starts at 0.005."""
-        shield_ec = shield_config["entropy_coeff"]
+        """Both use entropy schedules — shield starts at 0.01, builder at 0.005."""
+        shield_start = shield_config["entropy_coeff_schedule"][0][1]
         builder_start = builder_config["entropy_coeff_schedule"][0][1]
-        assert shield_ec == 0.01  # V7: Goldilocks zone
+        assert shield_start == 0.01  # V8: higher start for V6 reward exploration
         assert builder_start == 0.005
 
     # --- LR Schedule ---
@@ -187,15 +189,16 @@ class TestBuildPPOConfig:
         ppo_config = build_ppo_config("builder", builder_config, env_config)
         assert ppo_config is not None
 
-    def test_entropy_flat_propagated(self, shield_config):
-        """V7: entropy_coeff should be flat 0.01."""
+    def test_entropy_schedule_propagated(self, shield_config):
+        """V8: entropy_coeff should be the annealing schedule."""
         env_config = _dummy_env_config()
         ppo_config = build_ppo_config("shield", shield_config, env_config)
         ec = ppo_config.entropy_coeff
-        assert isinstance(ec, float), (
-            f"Expected entropy_coeff to be flat float, got {type(ec)}: {ec}"
+        assert isinstance(ec, list), (
+            f"Expected entropy_coeff to be a schedule (list), got {type(ec)}: {ec}"
         )
-        assert ec == 0.01
+        assert ec[0][1] == 0.01  # Start
+        assert ec[-1][1] <= 0.001  # End
 
     def test_minibatch_size_propagated(self, shield_config):
         env_config = _dummy_env_config()

@@ -208,6 +208,10 @@ class BaseTradingEnv(gym.Env):
         }
         reward = self._calculate_reward(reward_context)
 
+        # NaN guard — chaotic actions can produce NaN via gradient explosion
+        if np.isnan(reward) or np.isinf(reward):
+            reward = -5.0  # Safe fallback penalty
+
         # 6. Check termination
         terminated = False
         truncated = False
@@ -266,10 +270,11 @@ class BaseTradingEnv(gym.Env):
         if self.state.position is not None:
             pos = self.state.position
             price = self._get_price(idx)
+            entry = max(pos.entry_price, 1e-8)  # NaN guard
             if pos.direction == 1:  # long
-                pnl_pct = (price - pos.entry_price) / pos.entry_price * pos.leverage
+                pnl_pct = (price - entry) / entry * pos.leverage
             else:  # short
-                pnl_pct = (pos.entry_price - price) / pos.entry_price * pos.leverage
+                pnl_pct = (entry - price) / entry * pos.leverage
             liq_threshold = -1.0 / pos.leverage + LIQUIDATION_MAINTENANCE_MARGIN
             features.distance_to_liquidation = max(0.0, min(1.0,
                 (pnl_pct - liq_threshold) / max(abs(liq_threshold), 0.01)
@@ -391,7 +396,7 @@ class BaseTradingEnv(gym.Env):
 
         pos = self.state.position
         price = self._get_price(idx)
-        entry = pos.entry_price
+        entry = max(pos.entry_price, 1e-8)  # NaN guard
 
         # PnL calculation
         if pos.direction == 1:  # long
@@ -489,13 +494,14 @@ class BaseTradingEnv(gym.Env):
 
         pos = self.state.position
         price = self._get_price(idx)
+        entry = max(pos.entry_price, 1e-8)  # NaN guard
 
         if pos.direction == 1:
-            pnl_pct = (price - pos.entry_price) / pos.entry_price
+            pnl_pct = (price - entry) / entry
         else:
-            pnl_pct = (pos.entry_price - price) / pos.entry_price
+            pnl_pct = (entry - price) / entry
 
-        return pos.size_usd * pnl_pct * pos.leverage / pos.leverage  # per unit of margin
+        return pos.size_usd * pnl_pct  # per unit of margin
 
     def _margin_utilization(self) -> float:
         """Current margin utilization as fraction."""
