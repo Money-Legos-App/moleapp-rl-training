@@ -1,10 +1,12 @@
-# Shield (CONSERVATIVE) PPO Training Configuration — V5 (Schedule Fix)
+# Shield (CONSERVATIVE) PPO Training Configuration — V6 (Reward + Entropy Fix)
 # Target: Sharpe > 1.0, Max Drawdown < 10%, Win Rate > 60%
 #
-# V4 sweep found optimal static params (gamma=0.9967, clip=0.156, lr=5e-5,
-# entropy=0.005). V4 full train failed because aggressive LR/entropy schedules
-# caused policy collapse after 4M steps: high LR + near-zero entropy = violent
-# updates with no exploration. V5 fix: flat entropy, gentle LR decay only.
+# V5 achieved 27% peak return but two structural issues remained:
+# 1. Entropy collapsed (7.5 → negative) despite flat 0.005 — too weak for
+#    tight 0.156 clip. Raised to 0.015 (3x stronger).
+# 2. Reward hit -50K while trading profitably — state-based drawdown penalty
+#    accumulated -35/step × 2880 steps. Fixed: delta-based drawdown penalty
+#    + per-step reward floor at -5.0.
 #
 # V4 sweep source (trial c3048_00002):
 #   risk_adjusted_return: 5.13, drawdown: 5.8%, return: +6.6%
@@ -25,9 +27,10 @@ clip_param: 0.156                # Sweep winner: moderate clip
 num_epochs: 6                    # Sweep winner: 6 passes per batch
 minibatch_size: 256              # Sweep winner: smooth gradients
 train_batch_size_per_learner: 16384 # Large batch — stable updates
-entropy_coeff: 0.005             # FLAT — sweep-optimal. No decay. Agent keeps
-                                 # ability to adapt throughout training. V4's
-                                 # decay to 0.0001 caused deterministic death spiral.
+entropy_coeff: 0.015             # V6: 3x stronger than V5's 0.005. At 0.005,
+                                 # entropy still collapsed (7.5 → negative) because
+                                 # tight 0.156 clip drives policy toward determinism
+                                 # faster than 0.005 bonus can resist.
 vf_loss_coeff: 0.5               # Value function coefficient
 grad_clip: 0.5                   # Gradient clipping
 
@@ -71,5 +74,5 @@ num_gpus_per_learner: 1
 # W&B Logging
 wandb:
   project: moleapp-rl
-  run_name: shield-v5-schedule-fix
-  tags: ["shield", "conservative", "ppo", "rllib", "v5-flat-entropy"]
+  run_name: shield-v6-reward-entropy-fix
+  tags: ["shield", "conservative", "ppo", "rllib", "v6-delta-dd", "v6-entropy-015"]

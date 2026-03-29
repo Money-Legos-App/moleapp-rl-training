@@ -11,11 +11,12 @@ Risk Matrix:
 - Min LLM Confidence: 0.70
 - Funding Block: Always (never pay funding)
 
-Reward shaping:
-- 3x asymmetric loss penalty (losses hurt 3x more than gains help)
-- Heavy drawdown penalty (kill at 10%)
+Reward shaping (V6 — delta-based drawdown fix):
+- 2x asymmetric loss penalty (was 3x — too punitive, caused reward/performance disconnect)
+- Delta-based drawdown penalty (only penalizes drawdown *increases*, not state)
+- Per-step reward floor at -5.0 (prevents -50K episode accumulation)
 - Bonus for staying flat during high-volatility periods
-- HEAVY funding bleed penalty (Shield NEVER pays funding)
+- Funding bleed penalty (Shield NEVER pays funding)
 - Time penalty when flat (prevents "never trade" trivial solution)
 - Bonus for profitable low-risk trades (incentivizes safe arbitrage)
 """
@@ -41,13 +42,22 @@ class ShieldTradingEnv(BaseTradingEnv):
         super().__init__(**kwargs)
         self._last_close_step = 0
         self._had_position = False
+        self._prev_drawdown = 0.0
 
     def reset(self, **kwargs):
         self._last_close_step = 0
         self._had_position = False
+        self._prev_drawdown = 0.0
         return super().reset(**kwargs)
 
     def _calculate_reward(self, ctx: dict) -> float:
+        """V6 reward: delta-based drawdown + per-step floor to prevent -50K accumulation.
+
+        V5 postmortem: drawdown penalty applied every step as a state penalty,
+        accumulating -35/step at 7% drawdown × 2880 steps = -100K. The agent
+        learned profitable trades (27% return) but the reward said -50K.
+        Fix: penalize drawdown *increases* only, not the state itself.
+        """
         pnl = ctx["pnl_pct"]
         drawdown = ctx["drawdown"]
         has_position = ctx["has_position"]
@@ -56,22 +66,26 @@ class ShieldTradingEnv(BaseTradingEnv):
 
         reward = 0.0
 
-        # --- Core PnL reward with 3x loss asymmetry ---
+        # --- Core PnL reward with 2x loss asymmetry (was 3x — too punitive) ---
         if pnl < 0:
-            reward += pnl * 3.0  # Losses hurt 3x
+            reward += pnl * 2.0
         else:
             reward += pnl
 
         # --- Dense unrealized PnL signal (breadcrumbs for the Critic) ---
-        # Small reward/penalty every step while holding, proportional to unrealized P&L
         if has_position:
-            reward += unrealized * 0.5  # Half-weight vs realized — don't overweight paper gains
+            reward += unrealized * 0.3  # Reduced from 0.5 — less noise from paper P&L
 
-        # --- Drawdown penalty (escalating — episode terminates at 10% via base env) ---
-        if drawdown > 0.05:
-            reward -= drawdown * 5.0  # Escalating penalty above 5%
-        else:
-            reward -= drawdown * 0.5  # Mild awareness below 5%
+        # --- Drawdown penalty: DELTA-BASED (only when drawdown increases) ---
+        # V5 bug: state-based penalty accumulated -35/step for 2880 steps = -100K
+        # Fix: only penalize the *change* in drawdown, not the level
+        dd_delta = max(0.0, drawdown - self._prev_drawdown)  # Only penalize increases
+        if dd_delta > 0:
+            if drawdown > 0.05:
+                reward -= dd_delta * 10.0  # Strong signal when approaching 10% kill
+            else:
+                reward -= dd_delta * 2.0   # Mild awareness below 5%
+        self._prev_drawdown = drawdown
 
         # --- Track position close events (for volatility bonus) ---
         if self._had_position and not has_position:
@@ -90,11 +104,12 @@ class ShieldTradingEnv(BaseTradingEnv):
 
         # --- Anti-trivial-solution: time penalty when flat ---
         if not has_position:
-            reward -= 0.001  # Stronger penalty — force the agent to trade
+            reward -= 0.0005  # Halved from 0.001 — 0.001 × 2880 steps = -2.88 per ep
 
         # --- Safe trade bonus ---
         if pnl > 0.01 and drawdown < 0.005:
             reward += 0.01
 
-        # --- Scale ×100: prevent vanishing gradients from micro-PnL rewards ---
-        return reward * 100.0
+        # --- Scale ×100 + per-step floor (prevents catastrophic accumulation) ---
+        raw = reward * 100.0
+        return max(raw, -5.0)  # Floor at -5 per step → max episode penalty ~-14K vs old -50K
