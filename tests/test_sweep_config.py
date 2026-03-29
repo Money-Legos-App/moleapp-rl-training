@@ -317,6 +317,7 @@ class TestShieldVolatilityFix:
         env = ShieldTradingEnv.__new__(ShieldTradingEnv)
         env._last_close_step = 0
         env._had_position = False
+        env._prev_drawdown = 0.0
 
         ctx = {"pnl_pct": 0.0, "drawdown": 0.05, "has_position": False,
                "step": 100, "funding_cost": 0.0, "current_price": 100.0,
@@ -332,6 +333,7 @@ class TestShieldVolatilityFix:
         env = ShieldTradingEnv.__new__(ShieldTradingEnv)
         env._last_close_step = 0
         env._had_position = True  # had position last step
+        env._prev_drawdown = 0.0
 
         # Step where position closes (drawdown > 3%)
         ctx1 = {"pnl_pct": 0.0, "drawdown": 0.04, "has_position": False,
@@ -356,6 +358,7 @@ class TestShieldVolatilityFix:
         env = ShieldTradingEnv.__new__(ShieldTradingEnv)
         env._last_close_step = 50
         env._had_position = False
+        env._prev_drawdown = 0.0
 
         # 49 steps after close: no bonus
         ctx = {"pnl_pct": 0.0, "drawdown": 0.04, "has_position": False,
