@@ -1,31 +1,33 @@
-# Shield (CONSERVATIVE) PPO Training Configuration — V4 (Sweep-Optimized)
+# Shield (CONSERVATIVE) PPO Training Configuration — V5 (Schedule Fix)
 # Target: Sharpe > 1.0, Max Drawdown < 10%, Win Rate > 60%
 #
-# Hyperparameters from V4 sweep (trial c3048_00002):
+# V4 sweep found optimal static params (gamma=0.9967, clip=0.156, lr=5e-5,
+# entropy=0.005). V4 full train failed because aggressive LR/entropy schedules
+# caused policy collapse after 4M steps: high LR + near-zero entropy = violent
+# updates with no exploration. V5 fix: flat entropy, gentle LR decay only.
+#
+# V4 sweep source (trial c3048_00002):
 #   risk_adjusted_return: 5.13, drawdown: 5.8%, return: +6.6%
-#   Sweep: 6 trials, 750K steps, ASHA scheduler, metric=risk_adjusted_return
 
 algorithm: PPO
 env: ShieldTradingEnv
 
 # Training loop
-total_timesteps: 10_000_000     # ~14h on RTX 4090 (8 runners), ~8h on A100
+total_timesteps: 10_000_000     # ~50min on RTX 4090 (10 runners)
 
-# PPO Hyperparameters (V4 sweep winners)
-lr_schedule:                       # Warmup + decay — scaled for 10M full train
-  - [0, 0.0000017]                 # Start at peak/30 (sweep: 5e-5 peak)
-  - [100000, 0.00005]              # Ramp to peak by 100K
-  - [8000000, 0.000005]            # Decay to 10% by 8M
+# PPO Hyperparameters (V4 sweep winners + V5 schedule fix)
+lr_schedule:                       # Gentle linear decay — NO mid-training spike
+  - [0, 0.00005]                   # Start at sweep-optimal peak (5e-5)
+  - [10000000, 0.000001]           # Linear decay to 1e-6 by end — slow cooldown
 gamma: 0.9967                    # Sweep winner: patient risk management
 lambda_: 0.95                    # GAE for advantage estimation
-clip_param: 0.156                # Sweep winner: moderate clip (was 0.15)
+clip_param: 0.156                # Sweep winner: moderate clip
 num_epochs: 6                    # Sweep winner: 6 passes per batch
 minibatch_size: 256              # Sweep winner: smooth gradients
 train_batch_size_per_learner: 16384 # Large batch — stable updates
-entropy_coeff_schedule:          # Anneal exploration (sweep winner: start=0.005)
-  - [0, 0.005]                   # Moderate exploration start
-  - [5_000_000, 0.001]           # 5x reduction by midpoint
-  - [10_000_000, 0.0001]         # Near-zero by end — exploit, don't explore
+entropy_coeff: 0.005             # FLAT — sweep-optimal. No decay. Agent keeps
+                                 # ability to adapt throughout training. V4's
+                                 # decay to 0.0001 caused deterministic death spiral.
 vf_loss_coeff: 0.5               # Value function coefficient
 grad_clip: 0.5                   # Gradient clipping
 
@@ -69,5 +71,5 @@ num_gpus_per_learner: 1
 # W&B Logging
 wandb:
   project: moleapp-rl
-  run_name: shield-v4-rllib
-  tags: ["shield", "conservative", "ppo", "rllib", "v4-sweep"]
+  run_name: shield-v5-schedule-fix
+  tags: ["shield", "conservative", "ppo", "rllib", "v5-flat-entropy"]

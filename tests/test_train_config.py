@@ -65,34 +65,17 @@ class TestYAMLConfigParsing:
     def test_builder_config_exists(self):
         assert BUILDER_CONFIG_PATH.exists()
 
-    def test_shield_has_entropy_schedule(self, shield_config):
-        """entropy_coeff_schedule should be a list of [timestep, value] pairs."""
-        schedule = shield_config.get("entropy_coeff_schedule")
-        assert schedule is not None, "Shield config missing entropy_coeff_schedule"
-        assert isinstance(schedule, list)
-        assert len(schedule) >= 2
-        # Each entry is [timestep, coeff]
-        for entry in schedule:
-            assert len(entry) == 2
-            assert isinstance(entry[0], (int, float))
-            assert isinstance(entry[1], float)
+    def test_shield_has_flat_entropy(self, shield_config):
+        """V5: flat entropy_coeff — no schedule decay (prevents death spiral)."""
+        ec = shield_config.get("entropy_coeff")
+        assert ec is not None, "Shield config missing entropy_coeff"
+        assert isinstance(ec, float), f"Expected flat float, got {type(ec)}"
+        assert ec == 0.005
 
-    def test_builder_has_entropy_schedule(self, builder_config):
-        schedule = builder_config.get("entropy_coeff_schedule")
-        assert schedule is not None, "Builder config missing entropy_coeff_schedule"
-        assert isinstance(schedule, list)
-        assert len(schedule) >= 2
-
-    def test_entropy_schedule_decays(self, shield_config):
-        """Entropy should decrease over training (exploration annealing)."""
-        schedule = shield_config["entropy_coeff_schedule"]
-        assert schedule[0][1] > schedule[-1][1], "Entropy should decay, not increase"
-
-    def test_shield_no_flat_entropy_coeff(self, shield_config):
-        """When using schedule, flat entropy_coeff should NOT be present."""
-        assert "entropy_coeff" not in shield_config, (
-            "Config has both entropy_coeff and entropy_coeff_schedule — "
-            "remove flat entropy_coeff to avoid confusion"
+    def test_shield_no_entropy_schedule(self, shield_config):
+        """V5: shield uses flat entropy — schedule should NOT be present."""
+        assert "entropy_coeff_schedule" not in shield_config, (
+            "Shield V5 should use flat entropy_coeff, not a schedule"
         )
 
     def test_shield_minibatch_256(self, shield_config):
@@ -129,19 +112,19 @@ class TestYAMLConfigParsing:
         eval_cfg = builder_config.get("evaluation", {})
         assert eval_cfg.get("evaluation_parallel_to_training") is True
 
-    def test_configs_have_same_entropy_schedule(self, shield_config, builder_config):
-        """Both strategies should use the same entropy schedule."""
-        assert shield_config["entropy_coeff_schedule"] == builder_config["entropy_coeff_schedule"]
+    def test_builder_has_entropy_schedule(self, builder_config):
+        """Builder still uses entropy schedule (higher LR/clip survives decay)."""
+        schedule = builder_config.get("entropy_coeff_schedule")
+        assert schedule is not None, "Builder config missing entropy_coeff_schedule"
+        assert isinstance(schedule, list)
+        assert len(schedule) >= 2
 
-    def test_entropy_starts_at_005(self, shield_config):
-        """V3: lower starting entropy (0.005 vs V2's 0.01)."""
-        schedule = shield_config["entropy_coeff_schedule"]
-        assert schedule[0][1] == 0.005
-
-    def test_entropy_ends_at_00001(self, shield_config):
-        """V3: near-zero entropy at end — exploit, don't explore."""
-        schedule = shield_config["entropy_coeff_schedule"]
-        assert schedule[-1][1] == 0.0001
+    def test_entropy_values_match(self, shield_config, builder_config):
+        """Both strategies start at 0.005 entropy."""
+        shield_ec = shield_config["entropy_coeff"]
+        builder_start = builder_config["entropy_coeff_schedule"][0][1]
+        assert shield_ec == 0.005
+        assert builder_start == 0.005
 
     # --- LR Schedule ---
 
@@ -149,16 +132,24 @@ class TestYAMLConfigParsing:
         schedule = shield_config.get("lr_schedule")
         assert schedule is not None, "Shield config missing lr_schedule"
         assert isinstance(schedule, list)
-        assert len(schedule) == 3  # warmup start, peak, decay end
+        assert len(schedule) == 2  # V5: start at peak, linear decay to end
 
     def test_builder_has_lr_schedule(self, builder_config):
         schedule = builder_config.get("lr_schedule")
         assert schedule is not None
         assert len(schedule) == 3
 
-    def test_lr_schedule_warmup_then_decay(self, shield_config):
-        """LR should start low, ramp up, then decay."""
+    def test_shield_lr_decays_from_peak(self, shield_config):
+        """V5: LR starts at sweep-optimal peak and decays linearly."""
         schedule = shield_config["lr_schedule"]
+        start_lr = schedule[0][1]
+        end_lr = schedule[-1][1]
+        assert start_lr == 0.00005, "Should start at sweep-optimal 5e-5"
+        assert end_lr < start_lr, "LR should decay"
+
+    def test_builder_lr_warmup_then_decay(self, builder_config):
+        """Builder still uses warmup+decay (higher LR survives it)."""
+        schedule = builder_config["lr_schedule"]
         start_lr = schedule[0][1]
         peak_lr = schedule[1][1]
         end_lr = schedule[2][1]
@@ -196,15 +187,15 @@ class TestBuildPPOConfig:
         ppo_config = build_ppo_config("builder", builder_config, env_config)
         assert ppo_config is not None
 
-    def test_entropy_schedule_propagated(self, shield_config):
-        """entropy_coeff should be the schedule list, not a flat float."""
+    def test_entropy_flat_propagated(self, shield_config):
+        """V5: entropy_coeff should be flat float, not a schedule."""
         env_config = _dummy_env_config()
         ppo_config = build_ppo_config("shield", shield_config, env_config)
         ec = ppo_config.entropy_coeff
-        assert isinstance(ec, list), (
-            f"Expected entropy_coeff to be a schedule (list), got {type(ec)}: {ec}"
+        assert isinstance(ec, float), (
+            f"Expected entropy_coeff to be flat float, got {type(ec)}: {ec}"
         )
-        assert len(ec) >= 2
+        assert ec == 0.005
 
     def test_minibatch_size_propagated(self, shield_config):
         env_config = _dummy_env_config()
@@ -222,13 +213,13 @@ class TestBuildPPOConfig:
         assert ppo_config.clip_param == 0.156  # V4 sweep-optimized
 
     def test_lr_schedule_propagated(self, shield_config):
-        """lr should be the schedule list, not a flat float."""
+        """lr should be the 2-point schedule (start at peak, decay)."""
         env_config = _dummy_env_config()
         ppo_config = build_ppo_config("shield", shield_config, env_config)
         assert isinstance(ppo_config.lr, list), (
             f"Expected lr to be a schedule (list), got {type(ppo_config.lr)}"
         )
-        assert len(ppo_config.lr) == 3
+        assert len(ppo_config.lr) == 2
 
     def test_eval_parallel_propagated(self, shield_config):
         env_config = _dummy_env_config()
