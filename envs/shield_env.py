@@ -11,14 +11,13 @@ Risk Matrix:
 - Min LLM Confidence: 0.70
 - Funding Block: Always (never pay funding)
 
-Reward shaping (V6 — delta-based drawdown fix):
-- 2x asymmetric loss penalty (was 3x — too punitive, caused reward/performance disconnect)
-- Delta-based drawdown penalty (only penalizes drawdown *increases*, not state)
-- Per-step reward floor at -5.0 (prevents -50K episode accumulation)
-- Bonus for staying flat during high-volatility periods
+Reward shaping (V9 — The Sniper's Carrot):
+- V6 foundation: delta-based drawdown, per-step floor at -5.0
+- NEW: +10 flat bonus for profitable trade close (the carrot)
+- NEW: PnL multiplier on wins (5x) to make winning feel MUCH better than losing feels bad
+- 2x asymmetric loss penalty (unchanged from V6)
 - Funding bleed penalty (Shield NEVER pays funding)
 - Time penalty when flat (prevents "never trade" trivial solution)
-- Bonus for profitable low-risk trades (incentivizes safe arbitrage)
 """
 
 from __future__ import annotations
@@ -51,12 +50,12 @@ class ShieldTradingEnv(BaseTradingEnv):
         return super().reset(**kwargs)
 
     def _calculate_reward(self, ctx: dict) -> float:
-        """V6 reward: delta-based drawdown + per-step floor to prevent -50K accumulation.
+        """V9 reward: The Sniper's Carrot.
 
-        V5 postmortem: drawdown penalty applied every step as a state penalty,
-        accumulating -35/step at 7% drawdown × 2880 steps = -100K. The agent
-        learned profitable trades (27% return) but the reward said -50K.
-        Fix: penalize drawdown *increases* only, not the state itself.
+        V8 postmortem: V6 reward was all stick — agent learned trading is a
+        minefield, turtled up, took zero trades, win_rate hit 15%, eval NaN'd.
+        V9 fix: massive positive spike for profitable trades. The agent must
+        feel that winning is 5x better than losing is bad.
         """
         pnl = ctx["pnl_pct"]
         drawdown = ctx["drawdown"]
@@ -66,25 +65,26 @@ class ShieldTradingEnv(BaseTradingEnv):
 
         reward = 0.0
 
-        # --- Core PnL reward with 2x loss asymmetry (was 3x — too punitive) ---
-        if pnl < 0:
-            reward += pnl * 2.0
-        else:
-            reward += pnl
+        # ═══════════════════════════════════════════════════════════════
+        # THE CARROT — massive positive signal for profitable trades
+        # ═══════════════════════════════════════════════════════════════
+        if pnl > 0:
+            reward += pnl * 5.0           # 5x multiplier on winning PnL
+            reward += 0.1                 # +10 (after ×100 scale) flat bonus per win
+        elif pnl < 0:
+            reward += pnl * 2.0           # 2x loss asymmetry (unchanged from V6)
 
         # --- Dense unrealized PnL signal (breadcrumbs for the Critic) ---
         if has_position:
-            reward += unrealized * 0.3  # Reduced from 0.5 — less noise from paper P&L
+            reward += unrealized * 0.3
 
-        # --- Drawdown penalty: DELTA-BASED (only when drawdown increases) ---
-        # V5 bug: state-based penalty accumulated -35/step for 2880 steps = -100K
-        # Fix: only penalize the *change* in drawdown, not the level
-        dd_delta = max(0.0, drawdown - self._prev_drawdown)  # Only penalize increases
+        # --- Drawdown penalty: DELTA-BASED (V6, unchanged) ---
+        dd_delta = max(0.0, drawdown - self._prev_drawdown)
         if dd_delta > 0:
             if drawdown > 0.05:
-                reward -= dd_delta * 10.0  # Strong signal when approaching 10% kill
+                reward -= dd_delta * 10.0
             else:
-                reward -= dd_delta * 2.0   # Mild awareness below 5%
+                reward -= dd_delta * 2.0
         self._prev_drawdown = drawdown
 
         # --- Track position close events (for volatility bonus) ---
@@ -92,24 +92,24 @@ class ShieldTradingEnv(BaseTradingEnv):
             self._last_close_step = step
         self._had_position = has_position
 
-        # --- Volatility avoidance (decay-based, not unconditional) ---
+        # --- Volatility avoidance (decay-based) ---
         if not has_position and self._last_close_step > 0:
             steps_since_close = step - self._last_close_step
             if 0 < steps_since_close <= 48 and drawdown > 0.03:
                 decay = max(0.0, 1.0 - steps_since_close / 48.0)
                 reward += 0.02 * decay
 
-        # --- Funding bleed penalty: ALWAYS block (Shield NEVER pays funding) ---
+        # --- Funding bleed penalty: ALWAYS block ---
         reward -= abs(ctx.get("funding_cost", 0)) * 0.01
 
         # --- Anti-trivial-solution: time penalty when flat ---
         if not has_position:
-            reward -= 0.0005  # Halved from 0.001 — 0.001 × 2880 steps = -2.88 per ep
+            reward -= 0.0005
 
         # --- Safe trade bonus ---
         if pnl > 0.01 and drawdown < 0.005:
             reward += 0.01
 
-        # --- Scale ×100 + per-step floor (prevents catastrophic accumulation) ---
+        # --- Scale ×100 + per-step floor ---
         raw = reward * 100.0
-        return max(raw, -5.0)  # Floor at -5 per step → max episode penalty ~-14K vs old -50K
+        return max(raw, -5.0)

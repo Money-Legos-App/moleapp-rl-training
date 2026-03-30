@@ -1,50 +1,46 @@
-# Shield (CONSERVATIVE) PPO Training Configuration — V8 (Annealing Shield)
+# Shield (CONSERVATIVE) PPO Training Configuration — V9 (The Sniper's Carrot)
 # Target: Sharpe > 1.0, Max Drawdown < 10%, Win Rate > 60%
 #
-# Flat entropy is a trap. V5 (0.005) froze, V6 (0.015) exploded to 35,
-# V7 (0.01) climbed to 25 → NaN collapse. The tight 0.156 clip creates
-# gravitational pull toward determinism that no static coefficient can balance.
+# V8 postmortem: V6 reward was all stick. Agent turtled up, took zero trades,
+# win_rate decayed to 15%, eval NaN'd from 0-trade episodes. The shield
+# worked (2-5% drawdown) but the agent was too scared to pull the trigger.
 #
-# V8: entropy SCHEDULE. Start at 0.01 for early exploration of V6 reward
-# landscape, anneal to 0.001 by end to force exploitation. Dynamic tension
-# replaces static guesswork.
-#
-# Reward function: V6 (delta-based drawdown + per-step floor) — DO NOT CHANGE.
+# V9 fixes:
+# 1. Reward: +10 flat bonus + 5x PnL multiplier for profitable trades (the carrot)
+# 2. NaN guards: zero-trade episodes explicitly set win_rate=0, pnl=0
+# 3. LR floor: 5e-5 → 5e-6 (was 1e-6, brain froze before refining strategy)
+# 4. Entropy: anneal 0.01 → 0.001 (V8 schedule, proven foundation)
 
 algorithm: PPO
 env: ShieldTradingEnv
 
-# Training loop
-total_timesteps: 10_000_000     # ~50min on RTX 4090 (10 runners)
+total_timesteps: 10_000_000     # ~50min on RTX 4090
 
-# PPO Hyperparameters (V4 sweep winners + V8 annealing)
-lr_schedule:                       # Gentle linear decay — NO mid-training spike
+# PPO Hyperparameters
+lr_schedule:
   - [0, 0.00005]                   # Start at sweep-optimal peak (5e-5)
-  - [10000000, 0.000001]           # Linear decay to 1e-6 by end
-gamma: 0.9967                    # Sweep winner: patient risk management
-lambda_: 0.95                    # GAE for advantage estimation
-clip_param: 0.156                # Sweep winner: moderate clip
-num_epochs: 6                    # Sweep winner: 6 passes per batch
-minibatch_size: 256              # Sweep winner: smooth gradients
-train_batch_size_per_learner: 16384 # Large batch — stable updates
-entropy_coeff_schedule:          # V8: anneal exploration — map landscape then exploit
-  - [0, 0.01]                    # High early: explore V6 reward landscape
-  - [4000000, 0.005]             # Halve by 4M: start narrowing
-  - [8000000, 0.002]             # Gentle descent: consolidate alpha
-  - [10000000, 0.001]            # Low floor: exploit, but never fully deterministic
-vf_loss_coeff: 0.5               # Value function coefficient
-grad_clip: 0.5                   # Gradient clipping
+  - [10000000, 0.000005]           # V9: floor at 5e-6 (was 1e-6 — too aggressive)
+gamma: 0.9967
+lambda_: 0.95
+clip_param: 0.156
+num_epochs: 6
+minibatch_size: 256
+train_batch_size_per_learner: 16384
+entropy_coeff_schedule:          # V8 anneal: explore early, exploit late
+  - [0, 0.01]
+  - [4000000, 0.005]
+  - [8000000, 0.002]
+  - [10000000, 0.001]
+vf_loss_coeff: 0.5
+grad_clip: 0.5
 
-# Policy Network
 model:
-  fcnet_hiddens: [256, 256, 128]   # 3-layer MLP
+  fcnet_hiddens: [256, 256, 128]
   fcnet_activation: tanh
 
-# Parallelism — 10 runners + 1 learner + 1 driver = 12 of 13 CPUs
 num_env_runners: 10
 num_envs_per_env_runner: 4
 
-# Environment Parameters
 env_config:
   max_leverage: 1
   max_positions: 2
@@ -53,26 +49,22 @@ env_config:
   min_sl_pct: 0.005
   max_tp_pct: 0.075
   min_tp_pct: 0.01
-  episode_length: 2880           # 120 days of 1h candles (~4 months)
-  max_drawdown_pct: 0.10         # 10% kill switch — terminates episode
+  episode_length: 2880
+  max_drawdown_pct: 0.10
 
-# Evaluation
 evaluation:
-  evaluation_interval: 50        # Every 50 training iterations
-  evaluation_duration: 5         # 5 eval episodes
+  evaluation_interval: 50
+  evaluation_duration: 5
   evaluation_parallel_to_training: true
   num_env_runners: 1
 
-# Checkpointing (iterations, not timesteps)
 checkpoint_freq: 50
 
-# GPU — auto-detected at runtime by train.py
 num_gpus: 1
 num_learners: 1
 num_gpus_per_learner: 1
 
-# W&B Logging
 wandb:
   project: moleapp-rl
-  run_name: shield-v8-annealing
-  tags: ["shield", "conservative", "ppo", "rllib", "v8-entropy-anneal", "v6-reward"]
+  run_name: shield-v9-snipers-carrot
+  tags: ["shield", "conservative", "ppo", "rllib", "v9-carrot", "v6-reward-base"]

@@ -64,15 +64,21 @@ class TradingCallbacks(DefaultCallbacks):
         if initial_capital <= 0:
             initial_capital = 1000.0
 
-        total_return = total_pnl / initial_capital
+        total_return = total_pnl / max(initial_capital, 1e-8)
         total_trades = info.get("total_trades", 0)
         winning_trades = info.get("winning_trades", 0)
-        win_rate = winning_trades / max(total_trades, 1)
+
+        # V9: explicit zero-trade guard — no more NaN from 0/0
+        if total_trades == 0:
+            win_rate = 0.0
+            total_pnl = 0.0
+            total_return = 0.0
+        else:
+            win_rate = winning_trades / total_trades
+
         max_drawdown = info.get("max_drawdown", 0.0)
 
         # Risk-adjusted return: return / max(drawdown, 0.01)
-        # Used as ASHA optimization metric for Shield sweep.
-        # Penalizes high-drawdown runs even if they got lucky on returns.
         risk_adjusted_return = total_return / max(max_drawdown, 0.01)
 
         # Log via MetricsLogger (new API stack)

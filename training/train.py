@@ -277,6 +277,8 @@ def train(
 
     iteration = 0
     total_steps = 0
+    best_eval_pnl = float("-inf")  # V9: track best eval checkpoint
+    best_ckpt_path = None
 
     _dumped_keys = False  # One-time debug dump
 
@@ -337,6 +339,18 @@ def train(
 
             wandb.log(log_data, step=int(total_steps))
 
+            # V9: Best-model checkpointing — save the checkpoint with highest eval PnL
+            eval_pnl = log_data.get("eval/total_pnl")
+            if eval_pnl is not None and eval_pnl > best_eval_pnl:
+                best_eval_pnl = eval_pnl
+                best_dir = output_path / "best_checkpoint"
+                best_dir.mkdir(parents=True, exist_ok=True)
+                best_ckpt_path = algo.save_to_path(str(best_dir))
+                logger.info(
+                    f"New best model! eval_pnl={eval_pnl:.2f} at iter {iteration} "
+                    f"(steps={total_steps:,}) → {best_ckpt_path}"
+                )
+
         # Console progress
         if iteration % 5 == 0:
             env_runners = result.get("env_runners", {})
@@ -360,6 +374,12 @@ def train(
     final_path = str(output_path / f"{profile}_final")
     algo.save_to_path(final_path)
     logger.info(f"Saved final model to {final_path}")
+
+    # V9: Report best checkpoint
+    if best_ckpt_path:
+        logger.info(f"Best checkpoint (eval_pnl={best_eval_pnl:.2f}): {best_ckpt_path}")
+    else:
+        logger.warning("No best checkpoint saved — eval metrics may not have been logged")
 
     # Extract and save observation normalization stats (MeanStdFilter)
     _save_norm_stats(algo, output_path, profile)

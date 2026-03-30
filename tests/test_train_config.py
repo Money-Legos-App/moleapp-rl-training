@@ -66,7 +66,7 @@ class TestYAMLConfigParsing:
         assert BUILDER_CONFIG_PATH.exists()
 
     def test_shield_has_entropy_schedule(self, shield_config):
-        """V8: entropy annealing — 0.01 → 0.001 over 10M steps."""
+        """V8/V9: entropy annealing — 0.01 → 0.001 over 10M steps."""
         schedule = shield_config.get("entropy_coeff_schedule")
         assert schedule is not None, "Shield config missing entropy_coeff_schedule"
         assert isinstance(schedule, list)
@@ -142,11 +142,12 @@ class TestYAMLConfigParsing:
         assert len(schedule) == 3
 
     def test_shield_lr_decays_from_peak(self, shield_config):
-        """V5: LR starts at sweep-optimal peak and decays linearly."""
+        """V9: LR starts at 5e-5, decays to 5e-6 (raised floor from 1e-6)."""
         schedule = shield_config["lr_schedule"]
         start_lr = schedule[0][1]
         end_lr = schedule[-1][1]
         assert start_lr == 0.00005, "Should start at sweep-optimal 5e-5"
+        assert end_lr == 0.000005, "V9: floor at 5e-6 (was 1e-6)"
         assert end_lr < start_lr, "LR should decay"
 
     def test_builder_lr_warmup_then_decay(self, builder_config):
