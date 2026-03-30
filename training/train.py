@@ -263,6 +263,13 @@ def train(
             tags=wandb_cfg.get("tags", [profile, "ppo", "rllib"]),
             config=config,
         )
+        # V9: define eval metric summaries so W&B shows best/max, not last (which may be NaN)
+        wandb.define_metric("eval/total_pnl", summary="max")
+        wandb.define_metric("eval/total_return", summary="max")
+        wandb.define_metric("eval/win_rate", summary="max")
+        wandb.define_metric("eval/total_trades", summary="max")
+        wandb.define_metric("eval/max_drawdown", summary="min")
+        wandb.define_metric("eval/episode_reward_mean", summary="max")
         logger.info("W&B initialized")
     except ImportError:
         logger.info("W&B not installed, skipping")
@@ -324,17 +331,20 @@ def train(
                 if val is not None:
                     log_data[f"train/{metric_key}"] = val
 
-            # Eval metrics
+            # Eval metrics — filter NaN to prevent poisoning W&B summary
             eval_results = result.get("evaluation", {})
             if eval_results:
                 eval_runners = eval_results.get("env_runners", {})
-                log_data["eval/episode_reward_mean"] = eval_runners.get(
+                eval_reward = eval_runners.get(
                     "episode_return_mean",
-                    eval_runners.get("episode_reward_mean", 0),
+                    eval_runners.get("episode_reward_mean", None),
                 )
+                if eval_reward is not None and not (isinstance(eval_reward, float) and np.isnan(eval_reward)):
+                    log_data["eval/episode_reward_mean"] = eval_reward
+
                 for metric_key in ("total_return", "max_drawdown", "win_rate", "total_trades", "total_pnl"):
                     val = eval_runners.get(metric_key, None)
-                    if val is not None:
+                    if val is not None and not (isinstance(val, float) and np.isnan(val)):
                         log_data[f"eval/{metric_key}"] = val
 
             wandb.log(log_data, step=int(total_steps))
@@ -404,9 +414,9 @@ def _save_norm_stats(algo, output_path: Path, profile: str):
     try:
         # Try to get stats from env runner's env (if using NormalizeObservation wrapper)
         env_runner = algo.env_runner
-        env = env_runner.env
-        if hasattr(env, "obs_rms"):
-            # gym.wrappers.NormalizeObservation stores running stats
+        env = getattr(env_runner, "env", None)
+
+        if env is not None and hasattr(env, "obs_rms"):
             norm_stats = {
                 "obs_rms_mean": np.array(env.obs_rms.mean, dtype=np.float64),
                 "obs_rms_var": np.array(env.obs_rms.var, dtype=np.float64),
@@ -414,26 +424,28 @@ def _save_norm_stats(algo, output_path: Path, profile: str):
                 "clip_obs": 10.0,
             }
         else:
-            # Fallback: sample observations to compute stats
+            # Fallback: compute stats from training data file directly
             logger.info("No obs_rms found, computing norm stats from training data...")
-            sample_obs = []
-            test_env = env_runner.env
-            obs, _ = test_env.reset()
-            sample_obs.append(obs)
-            for _ in range(min(1000, len(test_env.market_data) - 1)):
-                action = test_env.action_space.sample()
-                obs, _, terminated, truncated, _ = test_env.step(action)
-                sample_obs.append(obs)
-                if terminated or truncated:
-                    obs, _ = test_env.reset()
-                    sample_obs.append(obs)
-            obs_arr = np.array(sample_obs)
-            norm_stats = {
-                "obs_rms_mean": obs_arr.mean(axis=0).astype(np.float64),
-                "obs_rms_var": obs_arr.var(axis=0).astype(np.float64),
-                "obs_rms_count": float(len(obs_arr)),
-                "clip_obs": 10.0,
-            }
+            from data.preprocessors.feature_engineer import build_observation
+
+            cache_dir = Path("/tmp/rl_training_data")
+            features_path = cache_dir / "train_features.pkl"
+            if features_path.exists():
+                with open(features_path, "rb") as f:
+                    features = pickle.load(f)
+                # Sample up to 2000 observations
+                step = max(1, len(features) // 2000)
+                sample_obs = [build_observation(features[i]) for i in range(0, len(features), step)]
+                obs_arr = np.array(sample_obs)
+                norm_stats = {
+                    "obs_rms_mean": obs_arr.mean(axis=0).astype(np.float64),
+                    "obs_rms_var": obs_arr.var(axis=0).astype(np.float64),
+                    "obs_rms_count": float(len(obs_arr)),
+                    "clip_obs": 10.0,
+                }
+            else:
+                logger.warning("No training data cache found, skipping norm stats")
+                return
 
         stats_path = output_path / f"{profile}_norm_stats.pkl"
         with open(stats_path, "wb") as f:

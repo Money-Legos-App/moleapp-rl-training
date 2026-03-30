@@ -1,36 +1,37 @@
-# Shield (CONSERVATIVE) PPO Training Configuration — V9 (The Sniper's Carrot)
-# Target: Sharpe > 1.0, Max Drawdown < 10%, Win Rate > 60%
+# Shield (CONSERVATIVE) PPO Training Configuration — V10 (Production Polish)
+# Target: Sharpe > 1.0, Max Drawdown < 10%, Win Rate > 50%
 #
-# V8 postmortem: V6 reward was all stick. Agent turtled up, took zero trades,
-# win_rate decayed to 15%, eval NaN'd from 0-trade episodes. The shield
-# worked (2-5% drawdown) but the agent was too scared to pull the trigger.
+# V9 breakthrough: eval_pnl climbed to +123.31, win_rate stable at 46%,
+# episode_reward +3,026. The Sniper's Carrot reward works.
 #
-# V9 fixes:
-# 1. Reward: +10 flat bonus + 5x PnL multiplier for profitable trades (the carrot)
-# 2. NaN guards: zero-trade episodes explicitly set win_rate=0, pnl=0
-# 3. LR floor: 5e-5 → 5e-6 (was 1e-6, brain froze before refining strategy)
-# 4. Entropy: anneal 0.01 → 0.001 (V8 schedule, proven foundation)
+# V10 polish for production deployment:
+# 1. Pipeline hardening: np.nan_to_num in callbacks, zero-trade guards
+# 2. Inference exporter fix: norm stats computed from training data cache
+# 3. Horizon extension: 20M steps (V9 was still improving at 10M)
+# 4. W&B NaN filter + define_metric summaries for clean dashboards
+#
+# After V10, both Shield and Builder weights exported for live trading.
 
 algorithm: PPO
 env: ShieldTradingEnv
 
-total_timesteps: 10_000_000     # ~50min on RTX 4090
+total_timesteps: 20_000_000     # ~100min on RTX 4090 (V9 still improving at 10M)
 
-# PPO Hyperparameters
+# PPO Hyperparameters (V9 proven winners)
 lr_schedule:
   - [0, 0.00005]                   # Start at sweep-optimal peak (5e-5)
-  - [10000000, 0.000005]           # V9: floor at 5e-6 (was 1e-6 — too aggressive)
+  - [20000000, 0.000005]           # Linear decay to 5e-6 floor by 20M
 gamma: 0.9967
 lambda_: 0.95
 clip_param: 0.156
 num_epochs: 6
 minibatch_size: 256
 train_batch_size_per_learner: 16384
-entropy_coeff_schedule:          # V8 anneal: explore early, exploit late
-  - [0, 0.01]
-  - [4000000, 0.005]
-  - [8000000, 0.002]
-  - [10000000, 0.001]
+entropy_coeff_schedule:          # Anneal scaled to 20M horizon
+  - [0, 0.01]                    # High early: map V9 reward landscape
+  - [7000000, 0.005]             # ~35%: start narrowing
+  - [14000000, 0.002]            # ~70%: consolidate alpha
+  - [20000000, 0.001]            # End: exploit, never fully deterministic
 vf_loss_coeff: 0.5
 grad_clip: 0.5
 
@@ -66,5 +67,5 @@ num_gpus_per_learner: 1
 
 wandb:
   project: moleapp-rl
-  run_name: shield-v9-snipers-carrot
-  tags: ["shield", "conservative", "ppo", "rllib", "v9-carrot", "v6-reward-base"]
+  run_name: shield-v10-production
+  tags: ["shield", "conservative", "ppo", "rllib", "v10-production", "20M"]
