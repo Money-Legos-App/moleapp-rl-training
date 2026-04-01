@@ -11,9 +11,11 @@ Risk Matrix:
 - Min LLM Confidence: 0.60
 - Funding Block: > 0.03% (block only extreme funding spikes)
 
-Reward shaping:
-- 1.5x asymmetric loss penalty
-- Drawdown penalty kicks in above 15%
+Reward shaping (V5 — Carrot + Delta Drawdown, ported from Shield V9/V10):
+- 3x PnL multiplier on wins + 0.1 flat bonus (the carrot)
+- 1.5x asymmetric loss penalty (unchanged — Builder is more loss-tolerant than Shield)
+- Delta-based drawdown penalty (only penalizes increases, not state)
+- Per-step reward floor at -5.0 (prevents -50K episode accumulation)
 - Trend-following bonus (reward for riding sustained moves)
 - Funding penalty only above 0.03% threshold (tolerate normal funding)
 """
@@ -41,9 +43,20 @@ class BuilderTradingEnv(BaseTradingEnv):
         kwargs.setdefault("profile_name", "builder")
         super().__init__(**kwargs)
 
-        self._prev_pnl = 0.0  # Track trend continuity
+        self._prev_pnl = 0.0
+        self._prev_drawdown = 0.0
+
+    def reset(self, **kwargs):
+        self._prev_pnl = 0.0
+        self._prev_drawdown = 0.0
+        return super().reset(**kwargs)
 
     def _calculate_reward(self, ctx: dict) -> float:
+        """V5 reward: Carrot + delta drawdown (ported from Shield V9/V10).
+
+        Builder gets a 3x win multiplier (vs Shield's 5x) because Builder
+        already has higher base returns from 2x leverage and larger positions.
+        """
         pnl = ctx["pnl_pct"]
         drawdown = ctx["drawdown"]
         has_position = ctx["has_position"]
@@ -51,40 +64,44 @@ class BuilderTradingEnv(BaseTradingEnv):
 
         reward = 0.0
 
-        # --- Core PnL reward with 1.5x loss asymmetry ---
-        if pnl < 0:
-            reward += pnl * 1.5
-        else:
-            reward += pnl
+        # ═══════════════════════════════════════════════════════════════
+        # THE CARROT — positive signal for profitable trades
+        # ═══════════════════════════════════════════════════════════════
+        if pnl > 0:
+            reward += pnl * 3.0           # 3x multiplier (Shield uses 5x)
+            reward += 0.1                 # +10 (after ×100) flat bonus per win
+        elif pnl < 0:
+            reward += pnl * 1.5           # 1.5x loss asymmetry (unchanged)
 
-        # --- Dense unrealized PnL signal (breadcrumbs for the Critic) ---
+        # --- Dense unrealized PnL signal ---
         if has_position:
-            reward += unrealized * 0.3  # Lighter weight than Shield — Builder holds longer
+            reward += unrealized * 0.3
 
-        # --- Trend-following bonus ---
-        # Reward consecutive profitable steps (riding a trend)
+        # --- Trend-following bonus (Builder specialty) ---
         if pnl > 0 and self._prev_pnl > 0 and has_position:
-            reward += pnl * 0.2  # 20% bonus for sustained gains
+            reward += pnl * 0.2           # 20% bonus for sustained gains
         self._prev_pnl = pnl
 
-        # --- Drawdown penalty (escalating — episode terminates at 20% via base env) ---
-        if drawdown > 0.15:
-            reward -= (drawdown - 0.15) * 10.0  # Steep ramp from 15-20%
-        elif drawdown > 0.10:
-            reward -= (drawdown - 0.10) * 2.0  # Gentle ramp from 10-15%
+        # --- Drawdown penalty: DELTA-BASED (ported from Shield V6) ---
+        dd_delta = max(0.0, drawdown - self._prev_drawdown)
+        if dd_delta > 0:
+            if drawdown > 0.15:
+                reward -= dd_delta * 10.0  # Steep near 20% kill zone
+            elif drawdown > 0.10:
+                reward -= dd_delta * 3.0   # Moderate 10-15% zone
+            else:
+                reward -= dd_delta * 1.0   # Mild awareness below 10%
+        self._prev_drawdown = drawdown
 
         # --- Funding bleed: only penalize above 0.03% threshold ---
         funding_cost = abs(ctx.get("funding_cost", 0))
         if funding_cost > FUNDING_PENALTY_THRESHOLD:
             reward -= (funding_cost - FUNDING_PENALTY_THRESHOLD) * 0.005
 
-        # --- Stronger time penalty to encourage activity ---
+        # --- Anti-trivial-solution: time penalty when flat ---
         if not has_position:
             reward -= 0.0005
 
-        # --- Scale ×100: prevent vanishing gradients from micro-PnL rewards ---
-        return reward * 100.0
-
-    def reset(self, **kwargs):
-        self._prev_pnl = 0.0
-        return super().reset(**kwargs)
+        # --- Scale ×100 + per-step floor ---
+        raw = reward * 100.0
+        return max(raw, -5.0)

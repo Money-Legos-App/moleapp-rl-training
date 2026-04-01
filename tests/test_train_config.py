@@ -122,11 +122,11 @@ class TestYAMLConfigParsing:
         assert len(schedule) >= 2
 
     def test_entropy_values(self, shield_config, builder_config):
-        """Both use entropy schedules — shield starts at 0.01, builder at 0.005."""
+        """Both use entropy schedules — shield starts at 0.01, builder at 0.008."""
         shield_start = shield_config["entropy_coeff_schedule"][0][1]
         builder_start = builder_config["entropy_coeff_schedule"][0][1]
-        assert shield_start == 0.01  # V8: higher start for V6 reward exploration
-        assert builder_start == 0.005
+        assert shield_start == 0.01
+        assert builder_start == 0.008  # V5: lower start (wider clip = less determinism)
 
     # --- LR Schedule ---
 
