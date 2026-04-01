@@ -36,14 +36,19 @@ ACTION_DIM = 5
 
 
 class DeterministicPolicy(nn.Module):
-    """Standalone MLP that mirrors RLlib's default FCNet architecture."""
+    """Standalone MLP that mirrors RLlib's default FCNet (actor encoder + pi head).
+
+    Architecture (matches RLlib new API stack PPO):
+      policy_net: obs(47) → 256 → tanh → 256 → tanh → 128 → tanh
+      action_head: 128 → 10 (5 action means + 5 log_stds)
+      output: first 5 dims only (deterministic action means)
+    """
 
     def __init__(self, obs_dim: int, action_dim: int, hiddens: list[int], activation: str = "tanh"):
         super().__init__()
 
         act_fn = {"tanh": nn.Tanh, "relu": nn.ReLU}[activation]
 
-        # Policy network (same structure as RLlib default FC)
         layers = []
         prev_size = obs_dim
         for h in hiddens:
@@ -52,116 +57,119 @@ class DeterministicPolicy(nn.Module):
             prev_size = h
         self.policy_net = nn.Sequential(*layers)
 
-        # Action mean head (continuous: 2*action_dim for mean + log_std)
+        # RLlib outputs 2*action_dim (means + log_stds)
         self.action_head = nn.Linear(prev_size, action_dim * 2)
 
     def forward(self, obs: torch.Tensor) -> torch.Tensor:
         features = self.policy_net(obs)
         action_dist_inputs = self.action_head(features)
-        # Take only action means (first action_dim dims), ignore log_std
+        # Deterministic: take only action means (first 5), discard log_stds
         return action_dist_inputs[:, :ACTION_DIM]
 
 
 def load_rl_module_weights(checkpoint_path: str) -> dict:
-    """Load RLModule state dict from an RLlib checkpoint directory."""
+    """Load RLModule state dict from an RLlib checkpoint directory.
+
+    RLlib new API stack (v2.54+) stores weights at:
+    <checkpoint>/learner_group/learner/rl_module/default_policy/module_state.pkl
+
+    Keys look like:
+      encoder.actor_encoder.net.mlp.{0,2,4}.{weight,bias}  (policy MLP)
+      encoder.critic_encoder.net.mlp.{0,2,4}.{weight,bias}  (value MLP)
+      pi.net.mlp.0.{weight,bias}  (action head: 128→10, means+log_std)
+      vf.net.mlp.0.{weight,bias}  (value head: 128→1)
+    """
     ckpt_dir = Path(checkpoint_path)
 
-    # RLlib new stack stores module weights in learner/
-    # Try multiple known paths
-    candidates = [
-        ckpt_dir / "learner" / "learner_group" / "learner" / "rl_module" / "default_policy" / "module_state.pkl",
-        ckpt_dir / "learner" / "module_state.pkl",
-        ckpt_dir / "learner" / "learner_group" / "default_policy" / "module_state.pkl",
-    ]
-
-    # Also try finding any .pkl that contains state dict
-    for pkl_path in ckpt_dir.rglob("*.pkl"):
-        if "module_state" in pkl_path.name or "rl_module" in str(pkl_path):
-            candidates.insert(0, pkl_path)
-
-    for path in candidates:
-        if path.exists():
-            logger.info(f"Found module state at: {path}")
-            with open(path, "rb") as f:
-                state = pickle.load(f)
-            return state
-
-    # Try .pt files (PyTorch format)
-    for pt_path in ckpt_dir.rglob("*.pt"):
-        logger.info(f"Found .pt file at: {pt_path}")
-        state = torch.load(pt_path, map_location="cpu", weights_only=False)
-        return state
-
-    raise FileNotFoundError(
-        f"No module_state found in {checkpoint_path}. "
-        f"Searched: {[str(c) for c in candidates]}"
+    # Exact path for RLlib new stack
+    module_state_path = (
+        ckpt_dir / "learner_group" / "learner" / "rl_module"
+        / "default_policy" / "module_state.pkl"
     )
+
+    if not module_state_path.exists():
+        # Fallback: search for any module_state.pkl
+        candidates = list(ckpt_dir.rglob("module_state.pkl"))
+        # Prefer the one under default_policy
+        for c in candidates:
+            if "default_policy" in str(c):
+                module_state_path = c
+                break
+        else:
+            if candidates:
+                module_state_path = candidates[0]
+            else:
+                raise FileNotFoundError(f"No module_state.pkl found in {checkpoint_path}")
+
+    logger.info(f"Loading weights from: {module_state_path}")
+    with open(module_state_path, "rb") as f:
+        state = pickle.load(f)
+
+    # Log keys for debugging
+    weight_keys = [k for k in state if hasattr(state[k], "shape")]
+    logger.info(f"Found {len(weight_keys)} weight tensors")
+    for k in weight_keys:
+        logger.info(f"  {k}: {state[k].shape}")
+
+    return state
 
 
 def map_rllib_weights(rllib_state: dict, model: DeterministicPolicy) -> None:
-    """Map RLlib weight names to our standalone model."""
+    """Map RLlib new API stack weight names to our standalone model.
+
+    RLlib keys (new API stack, PPO with separate actor/critic encoders):
+      encoder.actor_encoder.net.mlp.0.weight  → policy_net.0.weight  (47→256)
+      encoder.actor_encoder.net.mlp.0.bias    → policy_net.0.bias
+      encoder.actor_encoder.net.mlp.2.weight  → policy_net.2.weight  (256→256)
+      encoder.actor_encoder.net.mlp.2.bias    → policy_net.2.bias
+      encoder.actor_encoder.net.mlp.4.weight  → policy_net.4.weight  (256→128)
+      encoder.actor_encoder.net.mlp.4.bias    → policy_net.4.bias
+      pi.net.mlp.0.weight                     → action_head.weight   (128→10)
+      pi.net.mlp.0.bias                       → action_head.bias
+
+    We skip: encoder.critic_encoder.*, vf.*, pi.log_std_clip_param_const
+    """
+    # Explicit mapping: RLlib key → our model key
+    KEY_MAP = {
+        "encoder.actor_encoder.net.mlp.0.weight": "policy_net.0.weight",
+        "encoder.actor_encoder.net.mlp.0.bias": "policy_net.0.bias",
+        "encoder.actor_encoder.net.mlp.2.weight": "policy_net.2.weight",
+        "encoder.actor_encoder.net.mlp.2.bias": "policy_net.2.bias",
+        "encoder.actor_encoder.net.mlp.4.weight": "policy_net.4.weight",
+        "encoder.actor_encoder.net.mlp.4.bias": "policy_net.4.bias",
+        "pi.net.mlp.0.weight": "action_head.weight",
+        "pi.net.mlp.0.bias": "action_head.bias",
+    }
+
     model_state = model.state_dict()
+    mapped = 0
 
-    # RLlib FCNet weight naming convention:
-    #   encoder.net.0.weight → policy_net.0.weight (Linear)
-    #   encoder.net.1.bias   → (skip activation layers)
-    #   pi.0.weight          → action_head.weight
-    #
-    # Dump keys to understand structure
-    logger.info(f"RLlib state keys: {list(rllib_state.keys())[:20]}")
-    logger.info(f"Model state keys: {list(model_state.keys())}")
-
-    # Try automatic mapping
-    rllib_keys = list(rllib_state.keys())
-    model_keys = list(model_state.keys())
-
-    # Separate encoder and action head keys
-    encoder_weights = []
-    action_weights = []
-
-    for k in rllib_keys:
-        v = rllib_state[k]
-        if not isinstance(v, (torch.Tensor, np.ndarray)):
+    for rllib_key, model_key in KEY_MAP.items():
+        if rllib_key not in rllib_state:
+            logger.error(f"Missing RLlib weight: {rllib_key}")
             continue
-        if isinstance(v, np.ndarray):
-            v = torch.from_numpy(v)
+        if model_key not in model_state:
+            logger.error(f"Missing model param: {model_key}")
+            continue
 
-        if "pi" in k or "action" in k or "_action" in k:
-            action_weights.append((k, v))
-        elif "vf" in k or "value" in k or "_value" in k:
-            continue  # Skip value function
-        else:
-            encoder_weights.append((k, v))
+        src = rllib_state[rllib_key]
+        if isinstance(src, np.ndarray):
+            src = torch.from_numpy(src)
+        dst_shape = model_state[model_key].shape
 
-    # Map encoder weights to policy_net
-    policy_params = [(k, v) for k, v in model_state.items() if k.startswith("policy_net")]
-    logger.info(f"Encoder weights found: {len(encoder_weights)}, policy params: {len(policy_params)}")
+        if src.shape != dst_shape:
+            logger.error(f"Shape mismatch: {rllib_key} {src.shape} vs {model_key} {dst_shape}")
+            continue
 
-    if len(encoder_weights) == len(policy_params):
-        for (rk, rv), (mk, _) in zip(encoder_weights, policy_params):
-            model_state[mk] = rv.float()
-            logger.info(f"  {rk} → {mk} ({rv.shape})")
-    else:
-        logger.warning(f"Weight count mismatch: {len(encoder_weights)} vs {len(policy_params)}")
-        # Try matching by shape
-        for mk, mv in list(model_state.items()):
-            if mk.startswith("policy_net"):
-                for rk, rv in encoder_weights:
-                    if rv.shape == mv.shape:
-                        model_state[mk] = rv.float()
-                        encoder_weights.remove((rk, rv))
-                        logger.info(f"  {rk} → {mk} (shape match: {rv.shape})")
-                        break
+        model_state[model_key] = src.float()
+        mapped += 1
+        logger.info(f"  {rllib_key} → {model_key} ({src.shape})")
 
-    # Map action head
-    action_params = [(k, v) for k, v in model_state.items() if k.startswith("action_head")]
-    if len(action_weights) >= len(action_params):
-        for (rk, rv), (mk, _) in zip(action_weights, action_params):
-            model_state[mk] = rv.float()
-            logger.info(f"  {rk} → {mk} ({rv.shape})")
+    if mapped != len(KEY_MAP):
+        raise RuntimeError(f"Only mapped {mapped}/{len(KEY_MAP)} weights — export would be corrupt")
 
     model.load_state_dict(model_state)
-    logger.info("Weight mapping complete")
+    logger.info(f"Weight mapping complete: {mapped}/{len(KEY_MAP)} tensors loaded")
 
 
 def export(
